@@ -1,8 +1,13 @@
 # Sign Safari - Ann Arbor Summer Game 2026 Sign Map
 
+**Live at https://nickstrayer.me/sign-safari/** (GitHub Pages, `main` branch
+`/docs` folder).
+
 A static web app showing a heat map of AADL Summer Game 2026 lawn signs, with
 address/GPS search and personal "seen it" tracking stored in localStorage.
-No backend server; everything lives in `docs/`.
+Each sign's card also takes the code word printed on the physical sign; the
+progress panel's "Copy code list" button exports all collected codes for
+redeeming at play.aadl.org. No backend server; everything lives in `docs/`.
 
 ## Run locally
 
