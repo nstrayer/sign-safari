@@ -1,8 +1,10 @@
 // localStorage-backed "seen" store with pub/sub.
 // sg2026.seen  -> { "<id>": <epoch seconds marked>, ... }
+// sg2026.codes -> { "<id>": "<code word from the physical sign>", ... }
 // sg2026.settings -> { hideSeen, showBiz, showBadges }
 
 const SEEN_KEY = "sg2026.seen";
+const CODES_KEY = "sg2026.codes";
 const SETTINGS_KEY = "sg2026.settings";
 const VERSION_KEY = "sg2026.v";
 
@@ -29,6 +31,7 @@ function writeJson(key, value) {
 
 export function createStore() {
   let seen = readJson(SEEN_KEY, {});
+  let codes = readJson(CODES_KEY, {});
   let settings = { ...DEFAULT_SETTINGS, ...readJson(SETTINGS_KEY, {}) };
   try { localStorage.setItem(VERSION_KEY, "1"); } catch {}
 
@@ -64,6 +67,27 @@ export function createStore() {
       notifySeen(id, nowSeen);
       return nowSeen;
     },
+    getCode: (id) => codes[id] ?? "",
+    // Recording a code implies the sign was seen.
+    setCode(id, code) {
+      code = String(code ?? "").trim();
+      if (code) {
+        codes[id] = code;
+        if (!Object.hasOwn(seen, id)) seen[id] = Math.floor(Date.now() / 1000);
+      } else {
+        delete codes[id];
+      }
+      writeJson(CODES_KEY, codes);
+      writeJson(SEEN_KEY, seen);
+      notifySeen(id, Object.hasOwn(seen, id));
+    },
+    codeCount: () => Object.keys(codes).length,
+    // Codes ordered by when their sign was marked seen (oldest first).
+    allCodes() {
+      return Object.entries(codes)
+        .map(([id, code]) => ({ id, code, at: seen[id] ?? 0 }))
+        .sort((a, b) => a.at - b.at);
+    },
     setSetting(key, value) {
       settings = { ...settings, [key]: value };
       writeJson(SETTINGS_KEY, settings);
@@ -72,7 +96,7 @@ export function createStore() {
     settings: () => ({ ...settings }),
     onSeenChange(fn) { seenSubs.add(fn); },
     onSettingsChange(fn) { settingsSubs.add(fn); },
-    exportJson: () => JSON.stringify({ v: 1, seen }),
+    exportJson: () => JSON.stringify({ v: 1, seen, codes }),
     importJson(text) {
       const data = JSON.parse(text);
       const incoming = data && typeof data.seen === "object" && data.seen !== null ? data.seen : null;
@@ -85,6 +109,12 @@ export function createStore() {
         merged[id] = merged[id] ? Math.min(merged[id], at) : at;
       }
       seen = merged;
+      if (data.codes && typeof data.codes === "object") {
+        for (const [id, code] of Object.entries(data.codes)) {
+          if (typeof code === "string" && code.trim()) codes[id] = code.trim();
+        }
+        writeJson(CODES_KEY, codes);
+      }
       writeJson(SEEN_KEY, seen);
       for (const id of Object.keys(incoming)) notifySeen(id, true);
       return added;

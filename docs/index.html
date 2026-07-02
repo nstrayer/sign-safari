@@ -56,6 +56,10 @@
       <h2 class="sheet-addr" id="detailAddr"></h2>
       <p class="sheet-sub" id="detailSub"></p>
       <p class="sheet-stat" id="detailStat"></p>
+      <div class="code-row" id="codeRow">
+        <input id="codeInput" type="text" placeholder="Code word from the sign" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Code word from the sign" />
+        <button class="code-save" id="codeSave">Save</button>
+      </div>
       <button class="seen-btn" id="seenBtn">Mark as seen</button>
     </div>
   </section>
@@ -91,6 +95,12 @@
       <h3 class="panel-subhead">Recently spotted</h3>
       <ul class="seen-list" id="seenList"></ul>
       <p class="empty-note" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
+
+      <h3 class="panel-subhead">Your codes</h3>
+      <p class="panel-note" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text.</p>
+      <div class="backup-row">
+        <button class="pill-btn" id="copyCodesBtn">Copy code list</button>
+      </div>
 
       <h3 class="panel-subhead">Backup</h3>
       <p class="panel-note">Your progress lives only in this browser. Copy a backup now and then!</p>

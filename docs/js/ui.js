@@ -22,7 +22,12 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
     addr: el("detailAddr"),
     sub: el("detailSub"),
     stat: el("detailStat"),
+    codeRow: el("codeRow"),
+    codeInput: el("codeInput"),
+    codeSave: el("codeSave"),
     seenBtn: el("seenBtn"),
+    copyCodesBtn: el("copyCodesBtn"),
+    codesNote: el("codesNote"),
     panel: el("progressPanel"),
     panelClose: el("panelClose"),
     statTotal: el("statTotal"),
@@ -71,6 +76,13 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
       const when = document.createElement("span");
       when.className = "seen-when";
       when.textContent = fmtWhen(at);
+      const code = store.getCode(id);
+      if (code) {
+        const chip = document.createElement("span");
+        chip.className = "code-chip";
+        chip.textContent = code;
+        label.appendChild(chip);
+      }
       li.append(dot, label, when);
       if (item) {
         li.addEventListener("click", () => {
@@ -94,6 +106,8 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
     const reds = Number(props.reds ?? 0);
     els.stat.textContent = kind === "badge" ? "" : reds > 0 ? `Redeemed ${reds.toLocaleString()} times` : "Not redeemed yet - be the first!";
     els.seenBtn.hidden = kind === "badge";
+    els.codeRow.hidden = kind === "badge";
+    els.codeInput.value = store.getCode(feature.id);
     renderSeenBtn();
     els.sheet.hidden = false;
     els.sheetBackdrop.hidden = false;
@@ -131,6 +145,24 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
     });
   });
 
+  function saveCode() {
+    if (!current) return;
+    const had = store.getCode(current.id);
+    const val = els.codeInput.value;
+    store.setCode(current.id, val);
+    renderSeenBtn();
+    if (val.trim()) showToast(had ? "Code updated." : `Code saved - ${store.codeCount()} collected!`);
+    else if (had) showToast("Code removed.");
+  }
+
+  els.codeSave.addEventListener("click", saveCode);
+  els.codeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      saveCode();
+      els.codeInput.blur();
+    }
+  });
+
   els.sheetBackdrop.addEventListener("click", closeSheet);
 
   // Swipe-down to close (simple: drag on handle/sheet body top)
@@ -146,6 +178,8 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
   function openPanel() {
     renderProgress();
     renderSeenList();
+    const n = store.codeCount();
+    els.copyCodesBtn.textContent = n ? `Copy code list (${n})` : "Copy code list";
     els.panel.hidden = false;
   }
 
@@ -174,6 +208,20 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
   els.toggleBadges.addEventListener("change", () => store.setSetting("showBadges", els.toggleBadges.checked));
 
   // ---------- Backup ----------
+
+  els.copyCodesBtn.addEventListener("click", async () => {
+    const all = store.allCodes();
+    if (!all.length) {
+      showToast("No codes recorded yet.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(all.map((c) => c.code).join("\n"));
+      showToast(`Copied ${all.length} code${all.length === 1 ? "" : "s"}!`);
+    } catch {
+      showToast("Couldn't access clipboard.");
+    }
+  });
 
   els.exportBtn.addEventListener("click", async () => {
     try {

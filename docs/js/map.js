@@ -165,7 +165,7 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
     setHideSeen(hide, seenIds) {
       const homeIds = seenIds.filter((id) => !id.startsWith("biz-"));
       const bizIds = seenIds.filter((id) => id.startsWith("biz-"));
-      const filterFor = (ids) => (hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : null);
+      const filterFor = (ids) => (hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined);
       map.setFilter("signs-pts", filterFor(homeIds));
       map.setFilter("signs-heat", filterFor(homeIds));
       map.setFilter("biz-pts", filterFor(bizIds));
