@@ -72,6 +72,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
       const dot = document.createElement("span");
       dot.className = "result-dot";
       const label = document.createElement("span");
+      label.className = "seen-label";
       label.textContent = item ? item.label : `Sign ${id}`;
       const when = document.createElement("span");
       when.className = "seen-when";

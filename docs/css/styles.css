@@ -358,23 +358,15 @@ html, body {
   border-radius: 999px;
   background: #fff;
   padding: 10px 16px;
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 16px; /* prevents iOS zoom-on-focus */
   font-weight: 700;
-  letter-spacing: 0.5px;
   color: var(--navy);
   outline: none;
-  text-transform: uppercase;
 }
 
 .code-row input:focus { border-color: var(--blue); }
-.code-row input::placeholder {
-  font-family: var(--font-body);
-  font-weight: 400;
-  letter-spacing: 0;
-  text-transform: none;
-  color: #a4a2bd;
-}
+.code-row input::placeholder { font-weight: 400; color: #a4a2bd; }
 
 .code-save {
   flex: none;
@@ -392,18 +384,16 @@ html, body {
 .code-save:active { transform: scale(0.96); }
 
 .code-chip {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 8px 2px;
+  display: block;
+  width: fit-content;
+  margin-top: 3px;
+  padding: 1px 9px 2px;
   border-radius: 999px;
-  background: var(--gold);
+  background: rgba(255, 180, 59, 0.35);
   color: var(--navy);
-  font-family: var(--font-display);
-  font-size: 11.5px;
+  font-family: var(--font-body);
+  font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  vertical-align: 1px;
 }
 
 .seen-btn {
@@ -582,6 +572,12 @@ html, body {
   box-shadow: 0 2px 8px rgba(38, 40, 72, 0.06);
 }
 
+.seen-list .seen-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .seen-list .seen-when {
   margin-left: auto;
   font-size: 12px;
@@ -647,11 +643,12 @@ html, body {
 
 /* ---------- Toast ---------- */
 
+/* Sits below the header/search so it never covers the sheet's action button. */
 .toast {
   position: fixed;
   left: 50%;
-  bottom: calc(24px + env(safe-area-inset-bottom));
-  transform: translateX(-50%) translateY(8px);
+  top: calc(146px + env(safe-area-inset-top));
+  transform: translateX(-50%) translateY(-8px);
   z-index: 60;
   display: flex;
   align-items: center;
@@ -737,4 +734,6 @@ html, body {
     box-shadow: var(--shadow);
     overflow: hidden;
   }
+
+  .toast { top: 20px; }
 }

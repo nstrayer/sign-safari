@@ -41,7 +41,7 @@
   <div class="search-wrap" id="searchWrap">
     <div class="search-box">
       <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-      <input id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" spellcheck="false" aria-label="Search an address or place" />
+      <input id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search an address or place" />
       <button class="search-clear" id="searchClear" aria-label="Clear search">&times;</button>
     </div>
     <ul class="search-results" id="searchResults" role="listbox" hidden></ul>
@@ -57,7 +57,7 @@
       <p class="sheet-sub" id="detailSub"></p>
       <p class="sheet-stat" id="detailStat"></p>
       <div class="code-row" id="codeRow">
-        <input id="codeInput" type="text" placeholder="Code word from the sign" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-label="Code word from the sign" />
+        <input id="codeInput" type="text" placeholder="Code word from the sign" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code word from the sign" />
         <button class="code-save" id="codeSave">Save</button>
       </div>
       <button class="seen-btn" id="seenBtn">Mark as seen</button>
