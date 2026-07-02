@@ -79,6 +79,30 @@ html, body {
 
 .brand-text { position: relative; }
 
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-btn {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.info-btn:active { background: rgba(255, 255, 255, 0.18); }
+
 .brand h1 {
   margin: 0;
   font-family: var(--font-display);

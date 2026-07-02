@@ -1,7 +1,7 @@
 import { createStore } from "./store.js";
 import { createSignMap } from "./map.js";
 import { createSearch } from "./search.js";
-import { createUi } from "./ui.js";
+import { createUi, createWelcome } from "./ui.js";
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -10,13 +10,15 @@ async function fetchJson(url) {
 }
 
 async function main() {
+  const store = createStore();
+  // Before the data fetch, so a first visit greets immediately.
+  const welcome = createWelcome(store);
+
   const [signs, biz, badges] = await Promise.all([
     fetchJson("./data/signs.json"),
     fetchJson("./data/biz.json"),
     fetchJson("./data/badges.json"),
   ]);
-
-  const store = createStore();
 
   // Quick lookup for the seen list + search index.
   const signIndexById = new Map();
@@ -52,6 +54,7 @@ async function main() {
     totalTrackable: signs.features.length + biz.features.length,
     signIndexById,
     onFlyTo: (coords) => signMap.flyTo(coords),
+    welcome,
   });
   ui.setDataStamp(signs.generated);
 

@@ -9,7 +9,33 @@ function fmtWhen(epochSec) {
 
 const KIND_LABELS = { sign: "Lawn sign", biz: "Business code", badge: "Badge spot" };
 
-export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
+// Welcome / info modal. Created before the data fetch so it appears
+// immediately on a first visit, and wired to the header's "?" button.
+export function createWelcome(store) {
+  const welcome = document.getElementById("welcomePanel");
+  const backdrop = document.getElementById("welcomeBackdrop");
+
+  function open() {
+    welcome.hidden = false;
+    backdrop.hidden = false;
+  }
+
+  function close() {
+    welcome.hidden = true;
+    backdrop.hidden = true;
+    store.setWelcomed();
+  }
+
+  document.getElementById("welcomeGo").addEventListener("click", close);
+  document.getElementById("infoBtn").addEventListener("click", open);
+  backdrop.addEventListener("click", close);
+
+  if (!store.wasWelcomed()) open();
+
+  return { open, close, isOpen: () => !welcome.hidden };
+}
+
+export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcome }) {
   const el = (id) => document.getElementById(id);
   const els = {
     pill: el("progressPill"),
@@ -40,9 +66,6 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
     toggleBadges: el("toggleBadges"),
     exportBtn: el("exportBtn"),
     importBtn: el("importBtn"),
-    welcome: el("welcomePanel"),
-    welcomeBackdrop: el("welcomeBackdrop"),
-    welcomeGo: el("welcomeGo"),
     aboutBtn: el("aboutBtn"),
     dataStamp: el("dataStamp"),
     toast: el("toast"),
@@ -197,32 +220,15 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (!els.welcome.hidden) closeWelcome();
+    if (welcome.isOpen()) welcome.close();
     else if (!els.panel.hidden) closePanel();
     else if (current) closeSheet();
   });
 
-  // ---------- Welcome modal ----------
-
-  function openWelcome() {
-    els.welcome.hidden = false;
-    els.welcomeBackdrop.hidden = false;
-  }
-
-  function closeWelcome() {
-    els.welcome.hidden = true;
-    els.welcomeBackdrop.hidden = true;
-    store.setWelcomed();
-  }
-
-  els.welcomeGo.addEventListener("click", closeWelcome);
-  els.welcomeBackdrop.addEventListener("click", closeWelcome);
   els.aboutBtn.addEventListener("click", () => {
     closePanel();
-    openWelcome();
+    welcome.open();
   });
-
-  if (!store.wasWelcomed()) openWelcome();
 
   // ---------- Toggles ----------
 
