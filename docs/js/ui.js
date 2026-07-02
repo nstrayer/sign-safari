@@ -40,6 +40,10 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
     toggleBadges: el("toggleBadges"),
     exportBtn: el("exportBtn"),
     importBtn: el("importBtn"),
+    welcome: el("welcomePanel"),
+    welcomeBackdrop: el("welcomeBackdrop"),
+    welcomeGo: el("welcomeGo"),
+    aboutBtn: el("aboutBtn"),
     dataStamp: el("dataStamp"),
     toast: el("toast"),
     toastMsg: el("toastMsg"),
@@ -193,9 +197,32 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo }) {
 
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
-    if (!els.panel.hidden) closePanel();
+    if (!els.welcome.hidden) closeWelcome();
+    else if (!els.panel.hidden) closePanel();
     else if (current) closeSheet();
   });
+
+  // ---------- Welcome modal ----------
+
+  function openWelcome() {
+    els.welcome.hidden = false;
+    els.welcomeBackdrop.hidden = false;
+  }
+
+  function closeWelcome() {
+    els.welcome.hidden = true;
+    els.welcomeBackdrop.hidden = true;
+    store.setWelcomed();
+  }
+
+  els.welcomeGo.addEventListener("click", closeWelcome);
+  els.welcomeBackdrop.addEventListener("click", closeWelcome);
+  els.aboutBtn.addEventListener("click", () => {
+    closePanel();
+    openWelcome();
+  });
+
+  if (!store.wasWelcomed()) openWelcome();
 
   // ---------- Toggles ----------
 

@@ -111,7 +111,22 @@
 
       <p class="data-stamp" id="dataStamp"></p>
       <p class="credits">Sign data from the <a href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
+      <button class="about-link" id="aboutBtn">How does this app work?</button>
     </div>
+  </section>
+
+  <!-- Welcome / info modal -->
+  <div class="welcome-backdrop" id="welcomeBackdrop" hidden></div>
+  <section class="welcome" id="welcomePanel" role="dialog" aria-modal="true" aria-label="About Sign Safari" hidden>
+    <h2>Welcome to Sign Safari!</h2>
+    <p class="welcome-intro">A map of every Summer Game lawn sign in Ann Arbor, so you can plan a route and keep track of the ones you've found.</p>
+    <ul class="welcome-list">
+      <li><span class="welcome-dot"></span><span>Every dot is a lawn sign. Tap one to see its address.</span></li>
+      <li><span class="welcome-dot dot-seen"></span><span>Found it in real life? Mark it seen and type in the code word from the sign.</span></li>
+      <li><span class="welcome-dot dot-gold"></span><span>Tap your progress (top right) to copy your code list and redeem it at play.aadl.org.</span></li>
+    </ul>
+    <p class="welcome-note">Progress is saved only in this browser. Not an official AADL app.</p>
+    <button class="welcome-go" id="welcomeGo">Start exploring</button>
   </section>
 
   <div class="toast" id="toast" hidden>

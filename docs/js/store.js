@@ -2,11 +2,13 @@
 // sg2026.seen  -> { "<id>": <epoch seconds marked>, ... }
 // sg2026.codes -> { "<id>": "<code word from the physical sign>", ... }
 // sg2026.settings -> { hideSeen, showBiz, showBadges }
+// sg2026.welcomed -> "1" once the intro modal has been dismissed
 
 const SEEN_KEY = "sg2026.seen";
 const CODES_KEY = "sg2026.codes";
 const SETTINGS_KEY = "sg2026.settings";
 const VERSION_KEY = "sg2026.v";
+const WELCOMED_KEY = "sg2026.welcomed";
 
 const DEFAULT_SETTINGS = { hideSeen: false, showBiz: true, showBadges: false };
 
@@ -94,6 +96,12 @@ export function createStore() {
       for (const fn of settingsSubs) fn(settings);
     },
     settings: () => ({ ...settings }),
+    wasWelcomed() {
+      try { return localStorage.getItem(WELCOMED_KEY) === "1"; } catch { return true; }
+    },
+    setWelcomed() {
+      try { localStorage.setItem(WELCOMED_KEY, "1"); } catch {}
+    },
     onSeenChange(fn) { seenSubs.add(fn); },
     onSettingsChange(fn) { settingsSubs.add(fn); },
     exportJson: () => JSON.stringify({ v: 1, seen, codes }),
