@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sign Safari - AADL Summer Game 2026 Sign Map</title>
+  <meta name="description" content="Interactive heat map of Ann Arbor Summer Game 2026 lawn signs. Find signs near you and track the ones you've seen." />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#2F3061" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@600;700;800&family=Nunito+Sans:wght@400;700;800&display=swap" rel="stylesheet" />
+
+  <link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <link href="css/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <div id="map" aria-label="Map of Summer Game signs"></div>
+
+  <header class="app-header">
+    <div class="brand">
+      <svg class="brand-splat" viewBox="0 0 260 92" aria-hidden="true">
+        <path d="M28 46C18 30 34 12 56 14c14 1 20-8 38-9 22-1 26 10 46 8 18-2 28-8 48-4 16 3 18 14 36 16 16 2 26 4 30 16 4 13-8 18-6 28 2 11-8 20-24 19-13-1-19 7-36 7-15 0-21-7-38-6-18 1-24 8-42 6-16-2-18-11-34-12-14-1-28-2-32-14-3-10 8-16 4-25-3-7-14-8-18-4z" />
+      </svg>
+      <div class="brand-text">
+        <h1>Sign Safari</h1>
+        <p>Summer Game 2026 &middot; Ann Arbor</p>
+      </div>
+    </div>
+    <button class="progress-pill" id="progressPill" aria-haspopup="dialog" aria-label="Open your progress">
+      <span class="progress-count" id="progressCount">0</span>
+      <span class="progress-total" id="progressTotal">/ 0 seen</span>
+      <span class="progress-bar" aria-hidden="true">
+        <span class="progress-bar-fill" id="progressBarFill"></span>
+      </span>
+    </button>
+  </header>
+
+  <div class="search-wrap" id="searchWrap">
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+      <input id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" spellcheck="false" aria-label="Search an address or place" />
+      <button class="search-clear" id="searchClear" aria-label="Clear search">&times;</button>
+    </div>
+    <ul class="search-results" id="searchResults" role="listbox" hidden></ul>
+  </div>
+
+  <!-- Sign detail bottom sheet -->
+  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <section class="sheet" id="detailSheet" role="dialog" aria-modal="false" aria-label="Sign details" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="sheet-body">
+      <div class="sheet-kind" id="detailKind">Lawn sign</div>
+      <h2 class="sheet-addr" id="detailAddr"></h2>
+      <p class="sheet-sub" id="detailSub"></p>
+      <p class="sheet-stat" id="detailStat"></p>
+      <button class="seen-btn" id="seenBtn">Mark as seen</button>
+    </div>
+  </section>
+
+  <!-- Progress panel -->
+  <section class="panel" id="progressPanel" role="dialog" aria-modal="true" aria-label="Your progress" hidden>
+    <div class="panel-header">
+      <h2>Your safari</h2>
+      <button class="panel-close" id="panelClose" aria-label="Close">&times;</button>
+    </div>
+    <div class="panel-scroll">
+      <div class="stats-row">
+        <div class="stat-card">
+          <span class="stat-num" id="statTotal">0</span>
+          <span class="stat-label">signs seen</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-num" id="statToday">0</span>
+          <span class="stat-label">seen today</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-num" id="statPct">0%</span>
+          <span class="stat-label">of all signs</span>
+        </div>
+      </div>
+
+      <div class="toggles">
+        <label class="toggle-row"><input type="checkbox" id="toggleHideSeen" /><span>Hide seen signs on the map</span></label>
+        <label class="toggle-row"><input type="checkbox" id="toggleBiz" /><span>Show business codes</span></label>
+        <label class="toggle-row"><input type="checkbox" id="toggleBadges" /><span>Show badge spots</span></label>
+      </div>
+
+      <h3 class="panel-subhead">Recently spotted</h3>
+      <ul class="seen-list" id="seenList"></ul>
+      <p class="empty-note" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
+
+      <h3 class="panel-subhead">Backup</h3>
+      <p class="panel-note">Your progress lives only in this browser. Copy a backup now and then!</p>
+      <div class="backup-row">
+        <button class="pill-btn" id="exportBtn">Copy backup</button>
+        <button class="pill-btn" id="importBtn">Paste backup</button>
+      </div>
+
+      <p class="data-stamp" id="dataStamp"></p>
+      <p class="credits">Sign data from the <a href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" hidden>
+    <span id="toastMsg"></span>
+    <button id="toastUndo" class="toast-undo" hidden>Undo</button>
+  </div>
+
+  <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

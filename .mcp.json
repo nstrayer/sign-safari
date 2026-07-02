@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "positron": {
+      "type": "http",
+      "url": "http://localhost:43123"
+    }
+  }
+}

@@ -1,0 +1,59 @@
+/*-- scss:defaults --*/
+
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Nunito:ital,wght@0,400;0,600;0,700;1,400&display=swap');
+
+$font-family-sans-serif: "Nunito", -apple-system, "Segoe UI", Roboto, sans-serif;
+$headings-font-family: "Baloo 2", $font-family-sans-serif;
+$headings-font-weight: 700;
+
+// palette borrowed from the Summer Game's own posters
+$sg-yellow: #f6a81c;
+$sg-orange: #e8752a;
+$sg-teal: #2d9d8a;
+$sg-navy: #2e3057;
+
+$primary: $sg-orange;
+$link-color: $sg-teal;
+$body-color: #33343f;
+
+$code-block-bg: #fdf6e9;
+
+/*-- scss:rules --*/
+
+h1.title {
+  font-weight: 800;
+}
+
+h2 {
+  border-bottom: none;
+  color: $sg-navy;
+}
+
+h2::after {
+  content: "";
+  display: block;
+  width: 3.5rem;
+  height: 0.3rem;
+  margin-top: 0.25rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, $sg-yellow, $sg-orange);
+}
+
+.subtitle {
+  font-family: $headings-font-family;
+}
+
+.figure img,
+.quarto-figure img {
+  border-radius: 0.75rem;
+}
+
+table.table {
+  font-size: 0.95rem;
+}
+
+table.table thead th {
+  font-family: $headings-font-family;
+  color: $sg-navy;
+  border-bottom: 3px solid $sg-yellow;
+}

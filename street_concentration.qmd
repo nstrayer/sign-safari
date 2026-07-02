@@ -1,0 +1,365 @@
+---
+title: "Where Are All the Summer Game Signs?"
+subtitle: "Hunting down Ann Arbor's most code-packed streets and neighborhoods in the 2026 AADL Summer Game"
+author: "Nick Strayer"
+date: 2026-07-01
+format:
+  html:
+    theme: [flatly, summer-game.scss]
+    toc: true
+    toc-title: "On this page"
+    code-fold: true
+    code-summary: "Show the code"
+    embed-resources: true
+    title-block-banner: "#f6a81c"
+    title-block-banner-color: "#ffffff"
+execute:
+  warning: false
+  message: false
+---
+
+Every summer, lawn signs with secret codes pop up all over Ann Arbor as
+part of the library's Summer Game. This year I got curious: if you wanted
+to collect as many codes as possible on a single walk, where should you go?
+So I pulled the locations of all 2,493 registered signs and went looking
+for the answer.
+
+::: {.callout-tip}
+## The short version
+
+- **Liberty St** has more signs than any other street in town: **21** of them.
+- But the single best *walk* is on the west side: one quarter-mile circle
+  around **Duncan St, Circle Dr, and Wines Dr** contains **68 signs** --
+  followed closely by the Burns Park area with 67.
+- There's an [interactive map](#explore-the-map-yourself) at the bottom if
+  you want to scout your own route.
+:::
+
+## What's the Summer Game?
+
+The [Ann Arbor District Library Summer Game](https://play.aadl.org) is a
+city-wide scavenger hunt: players find codes hidden around town and online,
+and redeem the points for prizes. One of the best code sources is **lawn
+signs** -- round, colorful signs that players register and put up at their
+own homes specifically so other players can find them. The library
+publishes a live map of every registered sign at
+[aadl.org/summergame/map](https://aadl.org/summergame/map).
+
+That map gets its data from a JSON feed the page loads behind the scenes.
+It's not a documented API -- just the map's own data source, which requires
+the same AADL login the map does. It lists home signs, participating
+businesses, and badge locations; this analysis uses the home signs, which
+had **2,493 entries** when I pulled the data on July 1, 2026.
+
+## Which street has the most signs?
+
+The feed doesn't include a clean "street" field -- just a free-text address
+like `137 S Wagner Rd<br>Ann Arbor, MI<br>48103`. Since these are typed in
+by players, getting a fair street ranking means cleaning up a few things:
+
+- **House numbers** get dropped (`137 S Wagner Rd` becomes `S Wagner Rd`).
+- **Directional prefixes** get dropped too, so `N Main St` and `S Main St`
+  count as one street instead of two.
+- **Apartment numbers and other trailing bits** get trimmed by cutting the
+  address off after a recognized street suffix (`Ave`, `St`, `Rd`, `Dr`, ...),
+  which handles entries like `4770 Washtenaw Ave a3`.
+- A handful of entries (8 of 2,493) put a building name on the first line
+  with the real address on the second -- those get detected and re-parsed.
+
+Streets are then counted per city, since names like Liberty, Huron, and
+Washington exist in both Ann Arbor and Ypsilanti and shouldn't share a
+bucket.
+
+```{r}
+#| label: load-and-parse
+library(jsonlite)
+library(dplyr)
+library(ggplot2)
+
+raw <- fromJSON("summer_game_2026_raw.json", simplifyDataFrame = FALSE)
+
+SUFFIXES <- toupper(c("Ave","St","Rd","Dr","Blvd","Ct","Ln","Way","Pl","Cir","Ter",
+  "Pkwy","Hwy","Trl","Loop","Path","Row","Sq","Xing","Walk","Run","Bnd","Cv","Grv",
+  "Hl","Hls","Knl","Mnr","Pt","Pts","Rdg","Vw","Vlg","Aly","Byp","Cor","Cres","Ext",
+  "Gdns","Hts","Jct","Ldg","Mdw","Mdws","Pike","Plz","Spg","Spgs","Sta","Vly","Vis","Grn"))
+DIRECTIONS <- c("N","S","E","W","NE","NW","SE","SW")
+
+extract_street <- function(homecode_html) {
+  parts <- strsplit(homecode_html, "<br>")[[1]]
+  line1 <- parts[1]; line2 <- parts[2]
+  street_line <- if (grepl("^\\d", line1)) {
+    line1
+  } else if (grepl("^\\d", line2)) {
+    trimws(strsplit(line2, ",")[[1]][1])
+  } else {
+    line1
+  }
+  tokens <- strsplit(trimws(street_line), "\\s+")[[1]]
+  if (length(tokens) <= 1) return(NA_character_)
+  tokens <- tokens[-1]
+  if (length(tokens) > 1 && toupper(tokens[1]) %in% DIRECTIONS) {
+    tokens <- tokens[-1]
+  }
+  if (length(tokens) == 0) return(NA_character_)
+  suffix_idx <- which(toupper(tokens) %in% SUFFIXES)
+  if (length(suffix_idx) > 0) {
+    tokens <- tokens[1:max(suffix_idx)]
+  }
+  paste(tokens, collapse = " ")
+}
+
+homecodes <- bind_rows(lapply(raw$homecodes, function(x) {
+  parts <- strsplit(x$homecode, "<br>")[[1]]
+  tibble(
+    code_id = x$code_id,
+    street = extract_street(x$homecode),
+    city = trimws(strsplit(parts[2], ",")[[1]][1]),
+    lat = as.numeric(x$lat),
+    lon = as.numeric(x$lon)
+  )
+}))
+```
+
+With that cleanup done, here are the top 20 streets. **Liberty St** takes
+the crown with 21 signs, with Miller Ave right behind at 20.
+
+```{r}
+#| label: fig-top20
+#| fig-cap: "Top 20 streets by number of registered Summer Game lawn signs (2026)"
+#| fig-width: 8
+#| fig-height: 6
+street_city_counts <- homecodes %>%
+  count(street, city, name = "num_signs") %>%
+  arrange(desc(num_signs))
+
+top20 <- street_city_counts %>% slice_head(n = 20)
+
+top20 %>%
+  mutate(label = paste0(street, " (", city, ")")) %>%
+  ggplot(aes(x = reorder(label, num_signs), y = num_signs)) +
+  geom_col(fill = "#e8752a") +
+  geom_text(aes(label = num_signs), hjust = -0.3, size = 3.5, color = "#33343f") +
+  coord_flip() +
+  labs(
+    x = NULL,
+    y = "Number of signs",
+    title = "Streets with the most Summer Game signs"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    plot.title = element_text(face = "bold", color = "#2e3057")
+  ) +
+  expand_limits(y = max(top20$num_signs) * 1.1)
+```
+
+But hold on -- this ranking has a distortion built in. Liberty St runs
+almost the entire width of the city, so of course it accumulates a lot of
+signs. A long street with signs spread thinly across two miles beats a
+short street packed end-to-end, even though the short street is a far
+better place to actually go hunting. And two sign-heavy streets a block
+apart get no credit for being part of the same walkable cluster.
+
+## The better question: where's the best 5-minute walk?
+
+What a code hunter really wants to know is: **if I park somewhere and walk
+for about five minutes, where does that walk pass the most signs?** The
+standard urban-planning rule of thumb for a 5-minute walk is about 400
+meters (a quarter mile), so the question becomes: where does a 400m-radius
+circle enclose the most signs?
+
+To answer it, I laid a fine grid (50m spacing) over the city and, for every
+grid point, counted the signs within 400 meters. That gives a full density
+surface -- a heatmap of code-hunting potential. I limited this to Ann Arbor
+proper (2,305 of the 2,493 signs); the outlying towns have too few signs to
+compete. Three entries with corrupted coordinates in the raw feed (e.g. a
+longitude of -2964, which is not a place) were dropped first.
+
+```{r}
+#| label: density-grid
+# project lat/lon to local meters (equirectangular approx -- accurate to
+# well under 1% error at this scale, and much cheaper than great-circle math)
+aa <- homecodes %>%
+  filter(city == "Ann Arbor", lat > 41.5, lat < 43.5, lon > -85, lon < -83)
+
+lat0 <- mean(aa$lat); lon0 <- mean(aa$lon)
+m_per_deg_lat <- 111320
+m_per_deg_lon <- 111320 * cos(lat0 * pi / 180)
+aa <- aa %>% mutate(x = (lon - lon0) * m_per_deg_lon, y = (lat - lat0) * m_per_deg_lat)
+
+radius <- 400  # meters, ~5 minute walk (standard planning rule of thumb)
+grid_res <- 50 # meters, grid spacing
+buffer <- 200
+
+gx <- seq(min(aa$x) - buffer, max(aa$x) + buffer, by = grid_res)
+gy <- seq(min(aa$y) - buffer, max(aa$y) + buffer, by = grid_res)
+grid <- expand.grid(x = gx, y = gy)
+
+# count signs within `radius` of each grid point, via squared-distance
+# expansion (a-b)^2 = a^2+b^2-2ab so the cross term can use fast matrix
+# multiplication; done in chunks to keep memory bounded (~150k grid points
+# x 2,300 signs is too big for one dense distance matrix, but fine in chunks)
+px <- aa$x; py <- aa$y
+p_sq <- px^2 + py^2
+chunk_size <- 5000
+counts <- numeric(nrow(grid))
+for (start in seq(1, nrow(grid), by = chunk_size)) {
+  end <- min(start + chunk_size - 1, nrow(grid))
+  gxc <- grid$x[start:end]; gyc <- grid$y[start:end]
+  cross <- gxc %*% t(px) + gyc %*% t(py)
+  d2 <- outer(gxc^2 + gyc^2, rep(1, length(px))) +
+    matrix(p_sq, nrow = length(gxc), ncol = length(px), byrow = TRUE) - 2 * cross
+  counts[start:end] <- rowSums(d2 <= radius^2)
+}
+grid$count <- counts
+```
+
+```{r}
+#| label: fig-heatmap
+#| fig-cap: "Summer Game sign density in Ann Arbor -- color is the number of signs within a 400m (~5 minute) walk; x marks the top 5 distinct hotspots"
+#| fig-width: 8
+#| fig-height: 7
+find_top_hotspots <- function(grid, n = 5, suppress_radius = 2 * radius) {
+  remaining <- grid
+  hotspots <- list()
+  for (i in seq_len(n)) {
+    best <- remaining[which.max(remaining$count), ]
+    hotspots[[i]] <- best
+    d <- sqrt((remaining$x - best$x)^2 + (remaining$y - best$y)^2)
+    remaining <- remaining[d > suppress_radius, ]
+  }
+  bind_rows(hotspots)
+}
+
+describe_hotspot <- function(hs_x, hs_y, top_n = 3) {
+  d <- sqrt((aa$x - hs_x)^2 + (aa$y - hs_y)^2)
+  nearby <- aa[d <= radius, ]
+  nearby %>% count(street, sort = TRUE) %>% slice_head(n = top_n) %>% pull(street) %>% paste(collapse = ", ")
+}
+
+top5 <- find_top_hotspots(grid, n = 5)
+top5$lat <- top5$y / m_per_deg_lat + lat0
+top5$lon <- top5$x / m_per_deg_lon + lon0
+top5$nearby_streets <- mapply(describe_hotspot, top5$x, top5$y)
+
+grid %>%
+  ggplot(aes(x = x, y = y, fill = count)) +
+  geom_raster(interpolate = TRUE) +
+  scale_fill_viridis_c(name = "Signs within\n400m walk", option = "inferno") +
+  geom_point(data = aa, aes(x = x, y = y), inherit.aes = FALSE,
+             color = "white", size = 0.15, alpha = 0.35) +
+  geom_point(data = top5, aes(x = x, y = y), inherit.aes = FALSE,
+             color = "cyan", shape = 4, size = 3, stroke = 1.2) +
+  coord_fixed() +
+  labs(
+    title = "Where a 5-minute walk finds the most signs",
+    x = "meters east of city centroid", y = "meters north of city centroid"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", color = "#2e3057"))
+```
+
+The west side glows. To name the winners, I picked the five best distinct
+hotspots -- "distinct" matters, because the cells right next to the best
+one score nearly as high, so a naive top 5 would just be the same spot five
+times. Instead, each time a hotspot is picked, everything within 800m of it
+(the distance where two circles stop overlapping) is ruled out before
+picking the next.
+
+```{r}
+#| label: hotspot-table
+top5 %>%
+  transmute(
+    Rank = row_number(),
+    Signs = count,
+    `Streets in the circle` = nearby_streets,
+    Where = sprintf('<a href="https://www.google.com/maps?q=%.5f,%.5f" target="_blank">open in Google Maps</a>', lat, lon)
+  ) %>%
+  knitr::kable(escape = FALSE, caption = "The five best 5-minute walks in Ann Arbor, by sign count")
+```
+
+The champion is a pocket of the near-west side around **Duncan St, Circle
+Dr, and Wines Dr**: 68 signs within a quarter-mile circle. The **Burns
+Park** area (Granger Ave,
+Brooklyn Ave, Forest Ave) is a whisker behind at 67. Together, the top five
+circles hold over 300 signs -- about one of every seven signs in the city,
+in five quarter-mile pockets.
+
+::: {.callout-note collapse="true"}
+## Sanity check: a cheaper method agrees
+
+The grid scan computes distances from ~150,000 grid points, most of which
+aren't near any signs. A cheaper approach only tests circles centered on
+the 2,305 actual sign locations -- if signs really cluster, the best circle
+is nearly always centered on or next to one. Running that as a
+cross-check lands on essentially the same answer: top spot within a couple
+hundred meters of the grid scan's, comparable count, same west-side
+neighborhoods throughout. The grid scan earns its keep only because it
+produces the heatmap.
+
+```{r}
+#| label: point-anchored
+d2mat <- outer(aa$x, aa$x, "-")^2 + outer(aa$y, aa$y, "-")^2
+aa$point_count <- rowSums(d2mat <= radius^2)
+
+top5_points <- find_top_hotspots(
+  aa %>% rename(count = point_count), n = 5
+)
+
+top5_points %>%
+  transmute(Rank = row_number(), Signs = count, `Centered on` = paste0(street, ", ", city)) %>%
+  knitr::kable(caption = "Top 5 hotspots, point-anchored method")
+```
+:::
+
+## Explore the map yourself
+
+The static heatmap shows the overall shape, but planning an actual route is
+easier on a map you can pan and zoom. The heat layer below is the same
+density idea; the five hotspots are drawn as true 400m circles so you can
+see exactly which blocks they cover, and you can toggle on the individual
+signs.
+
+```{r}
+#| label: interactive-map
+library(leaflet)
+library(leaflet.extras)
+
+leaflet(aa) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addHeatmap(
+    lng = ~lon, lat = ~lat,
+    radius = 18, blur = 22, max = 0.15,
+    group = "Heatmap"
+  ) %>%
+  addCircleMarkers(
+    lng = ~lon, lat = ~lat,
+    radius = 1.5, color = "#2c7fb8", fillOpacity = 0.6, stroke = FALSE,
+    popup = ~paste0(street, ", ", city),
+    group = "Signs"
+  ) %>%
+  addCircles(
+    data = top5,
+    lng = ~lon, lat = ~lat, radius = radius,
+    color = "#d95f0e", fillColor = "#fec44f", fillOpacity = 0.15, weight = 2,
+    popup = ~paste0("<b>", count, " signs</b> within a 400m walk<br>Near: ", nearby_streets),
+    group = "Hotspots"
+  ) %>%
+  addLayersControl(
+    overlayGroups = c("Heatmap", "Signs", "Hotspots"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  hideGroup("Signs")
+```
+
+Happy hunting!
+
+## The fine print
+
+- **Data**: snapshot of the AADL Summer Game map's home-sign feed, pulled
+  July 1, 2026. Sign counts change all summer as players register new ones.
+- **Privacy**: every location here is one that a player registered on the
+  library's sign map on purpose, so that other players would come find it.
+  No new information is revealed -- just rearranged.
+- **Code**: this whole page is a [Quarto](https://quarto.org) document; every
+  chart has a "Show the code" toggle with the R that produced it.
