@@ -24,23 +24,6 @@ html, body {
   z-index: 25;
 }
 
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #fff;
-  border-radius: 999px;
-  padding: 4px 8px 4px 16px;
-  box-shadow: var(--shadow-card);
-}
-
-.search-icon {
-  width: 18px;
-  height: 18px;
-  flex: none;
-  color: var(--color-peri);
-}
-
 .search-box input {
   flex: 1;
   min-width: 0;
@@ -57,32 +40,9 @@ html, body {
 .search-box input::placeholder { color: #a4a2bd; font-weight: 400; }
 .search-box input::-webkit-search-cancel-button { display: none; }
 
-.search-clear {
-  flex: none;
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 50%;
-  background: #f0eef8;
-  color: var(--color-navy);
-  font-size: 18px;
-  line-height: 1;
-  cursor: pointer;
-  display: none;
-}
+.search-clear { display: none; }
 
 .search-box.has-text .search-clear { display: block; }
-
-.search-results {
-  margin: 8px 0 0;
-  padding: 6px;
-  list-style: none;
-  background: #fff;
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
-  max-height: 46dvh;
-  overflow-y: auto;
-}
 
 .search-results .group-label {
   padding: 8px 12px 4px;

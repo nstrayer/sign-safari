@@ -107,12 +107,12 @@
   </section>
 
   <div class="search-wrap" id="searchWrap">
-    <div class="search-box">
-      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+    <div class="search-box flex items-center gap-2 rounded-full bg-white py-1 pr-2 pl-4 shadow-card">
+      <svg class="size-4.5 flex-none text-peri" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
       <input id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search an address or place" />
-      <button class="search-clear" id="searchClear" aria-label="Clear search">&times;</button>
+      <button class="search-clear h-8 w-8 flex-none cursor-pointer rounded-full border-none bg-[#f0eef8] text-lg leading-none text-navy" id="searchClear" aria-label="Clear search">&times;</button>
     </div>
-    <ul class="search-results" id="searchResults" role="listbox" hidden></ul>
+    <ul class="search-results mt-2 max-h-[46dvh] list-none overflow-y-auto rounded-card bg-white p-1.5 shadow-card" id="searchResults" role="listbox" hidden></ul>
   </div>
 
   <!-- Sign detail bottom sheet -->
