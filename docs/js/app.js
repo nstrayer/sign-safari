@@ -80,7 +80,7 @@ async function main() {
   ]);
 
   // Route planner tab. The street network only loads when first opened.
-  const routePlanner = createRoutePlanner({ store });
+  const routePlanner = createRoutePlanner({ store, showToast: (msg) => ui.showToast(msg) });
   const viewBtns = document.querySelectorAll(".view-btn");
   function setView(view) {
     document.body.classList.toggle("route-mode", view === "route");

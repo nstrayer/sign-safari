@@ -1064,3 +1064,120 @@ body.route-mode .search-wrap { display: none; }
     width: 380px;
   }
 }
+
+/* Route planner wizard steps */
+
+.route-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.step-title {
+  margin: 0;
+  font: 800 18px/1.2 var(--font-display);
+  color: var(--navy);
+}
+
+.step-copy {
+  margin: 0;
+  font: 400 13.5px/1.45 var(--font-body);
+}
+
+.step-alt { color: #6b6d8f; }
+
+.cta-btn {
+  appearance: none;
+  border: 0;
+  background: var(--coral);
+  color: #fff;
+  font: 700 15px/1.2 var(--font-display);
+  padding: 12px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.cta-btn:disabled { opacity: 0.6; }
+
+.addr-box { position: relative; }
+
+.addr-box input {
+  width: 100%;
+  border: 2px solid #e3e4ee;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: 400 14px/1.2 var(--font-body);
+  color: var(--ink);
+  outline: none;
+}
+
+.addr-box input:focus { border-color: var(--peri); }
+
+.addr-results {
+  margin: 4px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid #e3e4ee;
+  border-radius: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+
+.addr-results li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font: 700 13.5px/1.3 var(--font-body);
+  cursor: pointer;
+}
+
+.addr-results li:hover { background: #f2f3fa; }
+
+.addr-results .result-sub {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: #6b6d8f;
+}
+
+.seed-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.seed-label {
+  font: 800 15px/1.3 var(--font-display);
+  color: var(--navy);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.text-btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--peri);
+  font: 700 13px/1.2 var(--font-body);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.route-actions { display: flex; gap: 8px; }
+
+.route-stops li.stop-start {
+  counter-increment: none;
+  font-weight: 700;
+  color: var(--navy);
+}
+
+.route-stops li.stop-start::before {
+  content: "S";
+  background: var(--gold);
+  color: var(--navy);
+}

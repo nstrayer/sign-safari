@@ -52,19 +52,44 @@
     <canvas id="routeCanvas"></canvas>
     <div class="route-hint" id="routeHint">Tap a sign to start a route</div>
     <div class="route-card">
-      <div class="route-row">
-        <div class="mode-toggle" role="group" aria-label="Route budget type">
-          <button class="mode-btn is-active" id="modeDistance">Distance</button>
-          <button class="mode-btn" id="modeCount">Sign count</button>
+      <div class="route-step" id="stepIntro" hidden>
+        <h3 class="step-title">Plan a sign run</h3>
+        <p class="step-copy">Pick a starting point and a budget - how far you feel like walking, or how many signs you're after - and this builds the shortest route through them along real streets. Seen signs are skipped so every stop is a new code word.</p>
+        <button class="cta-btn" id="introGo">Pick a starting point</button>
+      </div>
+
+      <div class="route-step" id="stepStart" hidden>
+        <h3 class="step-title">Where are you starting?</h3>
+        <button class="cta-btn" id="useLocation">Use my location</button>
+        <div class="addr-box">
+          <input id="addrInput" type="search" placeholder="...or type an address" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search a starting address" />
+          <ul class="addr-results" id="addrResults" hidden></ul>
         </div>
-        <label class="skip-row"><input type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
+        <p class="step-copy step-alt">...or tap any sign dot on the map above.</p>
       </div>
-      <div class="route-row">
-        <input type="range" id="budgetSlider" min="0.5" max="15" step="0.5" value="3" aria-label="Route budget" />
-        <span class="budget-label" id="budgetLabel">3.0 km</span>
+
+      <div class="route-step" id="stepPlan" hidden>
+        <div class="seed-row">
+          <span class="seed-label" id="seedLabel"></span>
+          <button class="text-btn" id="changeStart">change</button>
+        </div>
+        <div class="route-row">
+          <div class="mode-toggle" role="group" aria-label="Route budget type">
+            <button class="mode-btn is-active" id="modeDistance">Distance</button>
+            <button class="mode-btn" id="modeCount">Sign count</button>
+          </div>
+          <label class="skip-row"><input type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
+        </div>
+        <div class="route-row">
+          <input type="range" id="budgetSlider" min="0.5" max="15" step="0.5" value="3" aria-label="Route budget" />
+          <span class="budget-label" id="budgetLabel">3.0 km</span>
+        </div>
+        <p class="route-summary" id="routeSummary" hidden></p>
+        <div class="route-actions" id="routeActions" hidden>
+          <button class="pill-btn" id="exportGpx">Export GPX for your watch</button>
+        </div>
+        <ol class="route-stops" id="routeStops" hidden></ol>
       </div>
-      <p class="route-summary" id="routeSummary" hidden></p>
-      <ol class="route-stops" id="routeStops" hidden></ol>
     </div>
     <div class="route-loading" id="routeLoading">Loading street network...</div>
   </section>

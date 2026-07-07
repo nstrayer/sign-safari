@@ -6,13 +6,16 @@
 //   edges: [a, b, meters, ...] as node indices
 //   signs: [{ id, addr, n }] where n indexes nodes
 //
+// The tab walks through a tiny wizard: pick a start (geolocation, address
+// search, or tapping a sign), pick a distance or sign-count budget, get an
+// optimized route drawn on the network plus a GPX export for watches.
+//
 // All routing runs client-side: Dijkstra over a CSR adjacency, a greedy
 // nearest-unvisited walk from the seed until the budget runs out, then
 // 2-opt to untangle the visiting order.
 
 const COLORS = {
   street: "#c9cdd4",
-  intersection: "#aab0b9",
   unseen: "#e8704a",
   seen: "#43a860",
   route: "#2f3061",
@@ -20,6 +23,10 @@ const COLORS = {
 };
 
 const MIN_PER_KM = 12; // casual walking pace
+const DEG_M = 111320; // meters per degree of latitude (and cos-corrected lon)
+const INTRO_KEY = "sg2026.routeIntro";
+const PHOTON_URL = "https://photon.komoot.io/api/";
+const AREA = { lat: 42.2808, lon: -83.743, bbox: "-84.25,42.0,-83.35,42.55" };
 
 // ---------- Graph ----------
 
@@ -60,8 +67,7 @@ function buildGraph(raw) {
     adj[cur[b]] = a; wt[cur[b]++] = w;
   }
 
-  const signNode = new Set(raw.signs.map((s) => s.n));
-  return { nodeCount, edgeCount, xs, ys, off, adj, wt, edges: raw.edges, signs: raw.signs, signNode };
+  return { nodeCount, edgeCount, kx, xs, ys, off, adj, wt, edges: raw.edges, signs: raw.signs };
 }
 
 // ---------- Dijkstra ----------
@@ -146,51 +152,58 @@ function makeDijkstraCache(graph, cap = 48) {
 
 // ---------- Routing ----------
 
-function buildRoute(graph, shortest, seedIdx, { maxMeters, maxCount, excluded }) {
+// The seed is any node on the network (a sign's node, or the node nearest a
+// geolocation/address). A sign sitting exactly at the seed is simply the
+// first greedy pick at 0 m.
+function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }) {
   const { signs } = graph;
-  // Distances from one sign to all signs, as a compact per-stop row.
+  // Distances from a node to all signs, as compact per-stop rows.
   const rows = new Map();
-  const rowFor = (si) => {
-    if (!rows.has(si)) {
-      const { dist } = shortest(signs[si].n);
+  const rowFor = (node) => {
+    if (!rows.has(node)) {
+      const { dist } = shortest(node);
       const row = new Float32Array(signs.length);
       for (let j = 0; j < signs.length; j++) row[j] = dist[signs[j].n];
-      rows.set(si, row);
+      rows.set(node, row);
     }
-    return rows.get(si);
+    return rows.get(node);
   };
 
-  const stops = [seedIdx];
+  const stopSigns = []; // sign indices in visit order
   const todo = new Set();
   for (let i = 0; i < signs.length; i++) {
-    if (i !== seedIdx && !excluded.has(i)) todo.add(i);
+    if (!excluded.has(i)) todo.add(i);
   }
 
   let total = 0;
-  while (todo.size && stops.length < maxCount) {
-    const row = rowFor(stops[stops.length - 1]);
+  let cursor = seedNode;
+  while (todo.size && stopSigns.length < maxCount) {
+    const row = rowFor(cursor);
     let best = -1, bestD = Infinity;
     for (const c of todo) {
       if (row[c] < bestD) { bestD = row[c]; best = c; }
     }
     if (best < 0 || !isFinite(bestD) || total + bestD > maxMeters) break;
-    stops.push(best);
+    stopSigns.push(best);
     todo.delete(best);
     total += bestD;
+    cursor = signs[best].n;
   }
 
-  // 2-opt: reverse segments while the open path gets shorter.
-  const D = (a, b) => rowFor(a)[b];
-  let improved = stops.length > 2;
+  // 2-opt with the seed as a fixed anchor before position 0: reverse
+  // segments while the open path gets shorter.
+  const nodeOf = (p) => (p < 0 ? seedNode : signs[stopSigns[p]].n);
+  const D = (p, signPos) => rowFor(nodeOf(p))[stopSigns[signPos]];
+  let improved = stopSigns.length > 1;
   while (improved) {
     improved = false;
-    for (let i = 1; i < stops.length - 1; i++) {
-      for (let j = i + 1; j < stops.length; j++) {
-        let delta = D(stops[i - 1], stops[j]) - D(stops[i - 1], stops[i]);
-        if (j + 1 < stops.length) delta += D(stops[i], stops[j + 1]) - D(stops[j], stops[j + 1]);
+    for (let i = 0; i < stopSigns.length - 1; i++) {
+      for (let j = i + 1; j < stopSigns.length; j++) {
+        let delta = D(i - 1, j) - D(i - 1, i);
+        if (j + 1 < stopSigns.length) delta += D(i, j + 1) - D(j, j + 1);
         if (delta < -0.01) {
           let lo = i, hi = j;
-          while (lo < hi) { const t = stops[lo]; stops[lo++] = stops[hi]; stops[hi--] = t; }
+          while (lo < hi) { const t = stopSigns[lo]; stopSigns[lo++] = stopSigns[hi]; stopSigns[hi--] = t; }
           improved = true;
         }
       }
@@ -198,36 +211,47 @@ function buildRoute(graph, shortest, seedIdx, { maxMeters, maxCount, excluded })
   }
 
   total = 0;
-  for (let i = 0; i + 1 < stops.length; i++) total += D(stops[i], stops[i + 1]);
+  for (let i = 0; i < stopSigns.length; i++) total += D(i - 1, i);
 
   // Node path for each leg, walking prev[] back from the leg's end.
   const pathNodes = [];
-  for (let i = 0; i + 1 < stops.length; i++) {
-    const { prev } = shortest(signs[stops[i]].n);
+  for (let i = 0; i < stopSigns.length; i++) {
+    const { prev } = shortest(nodeOf(i - 1));
     const leg = [];
-    for (let v = signs[stops[i + 1]].n; v !== -1; v = prev[v]) leg.push(v);
+    for (let v = nodeOf(i); v !== -1; v = prev[v]) leg.push(v);
     leg.reverse();
     pathNodes.push(...(i === 0 ? leg : leg.slice(1)));
   }
 
-  return { stops, totalMeters: total, pathNodes };
+  return { stopSigns, totalMeters: total, pathNodes };
 }
 
 // ---------- View ----------
 
-export function createRoutePlanner({ store }) {
+export function createRoutePlanner({ store, showToast }) {
   const el = (id) => document.getElementById(id);
   const els = {
     view: el("routeView"),
     canvas: el("routeCanvas"),
     hint: el("routeHint"),
     loading: el("routeLoading"),
+    stepIntro: el("stepIntro"),
+    stepStart: el("stepStart"),
+    stepPlan: el("stepPlan"),
+    introGo: el("introGo"),
+    useLocation: el("useLocation"),
+    addrInput: el("addrInput"),
+    addrResults: el("addrResults"),
+    seedLabel: el("seedLabel"),
+    changeStart: el("changeStart"),
     modeDistance: el("modeDistance"),
     modeCount: el("modeCount"),
     slider: el("budgetSlider"),
     budgetLabel: el("budgetLabel"),
     skipSeen: el("skipSeen"),
     summary: el("routeSummary"),
+    actions: el("routeActions"),
+    exportGpx: el("exportGpx"),
     stops: el("routeStops"),
   };
   const ctx = els.canvas.getContext("2d");
@@ -239,11 +263,49 @@ export function createRoutePlanner({ store }) {
 
   // View state: world center + pixels per world unit.
   const view = { cx: 0, cy: 0, scale: 1, fitScale: 1 };
-  let seedIdx = -1;
+  let seed = null; // { node, label, isSign }
   let route = null;
   let routePath = null; // Path2D in world coords
   let mode = "distance"; // or "count"
   let needsDraw = false;
+
+  // ---------- Wizard steps ----------
+
+  function setStep(step) {
+    els.stepIntro.hidden = step !== "intro";
+    els.stepStart.hidden = step !== "start";
+    els.stepPlan.hidden = step !== "plan";
+    els.hint.hidden = step === "intro";
+    if (step === "start") els.hint.textContent = "You can also just tap a sign dot";
+    if (step === "plan") els.hint.textContent = `Starting at ${seed.label}`;
+  }
+
+  function currentStep() {
+    if (!els.stepIntro.hidden) return "intro";
+    if (!els.stepStart.hidden) return "start";
+    return "plan";
+  }
+
+  function setSeed(next) {
+    seed = next;
+    els.seedLabel.textContent = seed.label;
+    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+    setStep("plan");
+    rebuild();
+  }
+
+  els.introGo.addEventListener("click", () => {
+    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+    setStep("start");
+  });
+
+  els.changeStart.addEventListener("click", () => {
+    seed = null;
+    route = null;
+    routePath = null;
+    setStep("start");
+    scheduleDraw();
+  });
 
   // ---------- Loading ----------
 
@@ -290,7 +352,7 @@ export function createRoutePlanner({ store }) {
     view.scale = view.fitScale;
   }
 
-  // Zoom to the built route, framed in the canvas area above the card.
+  // Zoom to the built route, framed in the canvas area the card leaves free.
   function fitToRoute() {
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const n of route.pathNodes) {
@@ -337,6 +399,21 @@ export function createRoutePlanner({ store }) {
     });
   }
 
+  function drawBadge(sx, sy, text, fill, textFill) {
+    ctx.beginPath();
+    ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = textFill;
+    ctx.font = "700 11px 'Nunito Sans', sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, sx, sy + 0.5);
+  }
+
   function draw() {
     if (!graph || els.view.hidden) return;
     const dpr = devicePixelRatio || 1;
@@ -377,32 +454,23 @@ export function createRoutePlanner({ store }) {
     ctx.fillStyle = COLORS.unseen;
     ctx.fill(unseenDots);
 
-    // Route stops: numbered, in visit order. Seed gets a gold halo.
-    if (route) {
-      for (let i = 0; i < route.stops.length; i++) {
-        const s = graph.signs[route.stops[i]];
-        const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
-        ctx.beginPath();
-        ctx.arc(sx, sy, 10, 0, Math.PI * 2);
-        ctx.fillStyle = i === 0 ? COLORS.seed : COLORS.route;
-        ctx.fill();
-        ctx.strokeStyle = "#fff";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.fillStyle = i === 0 ? COLORS.route : "#fff";
-        ctx.font = "700 11px 'Nunito Sans', sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(String(i + 1), sx, sy + 0.5);
+    // Start anchor, unless the first stop sits exactly on it.
+    if (seed) {
+      const firstStopNode = route?.stopSigns.length ? graph.signs[route.stopSigns[0]].n : -1;
+      if (firstStopNode !== seed.node) {
+        const [sx, sy] = toScreen(graph.xs[seed.node], graph.ys[seed.node]);
+        drawBadge(sx, sy, "S", COLORS.seed, COLORS.route);
       }
-    } else if (seedIdx >= 0) {
-      const s = graph.signs[seedIdx];
-      const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
-      ctx.beginPath();
-      ctx.arc(sx, sy, 12, 0, Math.PI * 2);
-      ctx.strokeStyle = COLORS.seed;
-      ctx.lineWidth = 4;
-      ctx.stroke();
+    }
+
+    // Route stops: numbered, in visit order.
+    if (route) {
+      for (let i = 0; i < route.stopSigns.length; i++) {
+        const s = graph.signs[route.stopSigns[i]];
+        const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
+        const isStart = i === 0 && s.n === seed.node;
+        drawBadge(sx, sy, String(i + 1), isStart ? COLORS.seed : COLORS.route, isStart ? COLORS.route : "#fff");
+      }
     }
   }
 
@@ -474,13 +542,132 @@ export function createRoutePlanner({ store }) {
       if (d < bestD) { bestD = d; best = i; }
     }
     if (best >= 0) {
-      seedIdx = best;
-      els.hint.textContent = `Starting at ${graph.signs[best].addr}`;
-      rebuild();
+      const s = graph.signs[best];
+      setSeed({ node: s.n, label: s.addr, isSign: true });
     }
   }
 
-  // ---------- Controls ----------
+  // ---------- Start step: geolocation + address search ----------
+
+  // Nearest network node to a lon/lat, and roughly how far away it is.
+  function nearestNode(lon, lat) {
+    const x = lon * graph.kx, y = lat;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < graph.nodeCount; i++) {
+      const d = (graph.xs[i] - x) ** 2 + (graph.ys[i] - y) ** 2;
+      if (d < bestD) { bestD = d; best = i; }
+    }
+    return { node: best, meters: Math.sqrt(bestD) * DEG_M };
+  }
+
+  function seedFromCoords(lon, lat, label) {
+    const { node, meters } = nearestNode(lon, lat);
+    if (meters > 2000) {
+      showToast("That spot is outside the mapped street network.");
+      return;
+    }
+    setSeed({ node, label, isSign: false });
+  }
+
+  els.useLocation.addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      showToast("This browser can't share your location.");
+      return;
+    }
+    els.useLocation.disabled = true;
+    els.useLocation.textContent = "Locating...";
+    const done = () => {
+      els.useLocation.disabled = false;
+      els.useLocation.textContent = "Use my location";
+    };
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        done();
+        seedFromCoords(pos.coords.longitude, pos.coords.latitude, "your location");
+      },
+      () => {
+        done();
+        showToast("Couldn't get your location - try the address box.");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  });
+
+  // Address search: instant matches over sign addresses, Photon places after
+  // a pause (same service and area bias as the map tab's search).
+  let addrDebounce = null;
+  let photonAbort = null;
+
+  function renderAddrResults(items) {
+    els.addrResults.innerHTML = "";
+    for (const item of items) {
+      const li = document.createElement("li");
+      li.textContent = item.label;
+      if (item.sub) {
+        const sub = document.createElement("span");
+        sub.className = "result-sub";
+        sub.textContent = item.sub;
+        li.appendChild(sub);
+      }
+      li.addEventListener("click", () => {
+        els.addrResults.hidden = true;
+        els.addrInput.value = "";
+        if (item.sign) setSeed({ node: item.sign.n, label: item.sign.addr, isSign: true });
+        else seedFromCoords(item.coords[0], item.coords[1], item.label);
+      });
+      els.addrResults.appendChild(li);
+    }
+    els.addrResults.hidden = items.length === 0;
+  }
+
+  function localAddrMatches(q) {
+    const nq = q.toLowerCase();
+    const out = [];
+    for (const s of graph.signs) {
+      if (s.addr.toLowerCase().includes(nq)) {
+        out.push({ label: s.addr, sub: "sign", sign: s });
+        if (out.length >= 4) break;
+      }
+    }
+    return out;
+  }
+
+  els.addrInput.addEventListener("input", () => {
+    const q = els.addrInput.value.trim();
+    clearTimeout(addrDebounce);
+    photonAbort?.abort();
+    if (q.length < 2 || !graph) {
+      els.addrResults.hidden = true;
+      return;
+    }
+    const locals = localAddrMatches(q);
+    renderAddrResults(locals);
+    if (q.length < 3) return;
+    addrDebounce = setTimeout(async () => {
+      photonAbort = new AbortController();
+      const url = `${PHOTON_URL}?q=${encodeURIComponent(q)}&lat=${AREA.lat}&lon=${AREA.lon}&bbox=${AREA.bbox}&limit=4`;
+      try {
+        const res = await fetch(url, { signal: photonAbort.signal });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (els.addrInput.value.trim() !== q) return; // stale
+        const places = (data.features ?? []).map((f) => {
+          const p = f.properties;
+          const street = p.street && p.housenumber ? `${p.housenumber} ${p.street}` : p.street;
+          return {
+            label: p.name ?? street ?? "Unknown place",
+            sub: [street !== p.name ? street : null, p.city ?? p.district].filter(Boolean).join(", "),
+            coords: f.geometry.coordinates,
+          };
+        });
+        renderAddrResults([...locals, ...places]);
+      } catch (e) {
+        if (e.name !== "AbortError") console.warn("Photon search failed", e);
+      }
+    }, 300);
+  });
+
+  // ---------- Budget controls ----------
 
   function sliderConfig() {
     if (mode === "distance") {
@@ -515,20 +702,24 @@ export function createRoutePlanner({ store }) {
   els.skipSeen.addEventListener("change", rebuild);
   store.onSeenChange(() => scheduleDraw());
 
+  // ---------- Build + result ----------
+
   function rebuild() {
-    if (seedIdx < 0 || !graph) return;
+    if (!seed || !graph) return;
     els.summary.hidden = false;
     els.summary.textContent = "Building route...";
     els.stops.hidden = true;
+    els.actions.hidden = true;
     // Let the status paint before the synchronous Dijkstra work starts.
     setTimeout(() => {
+      if (!seed) return;
       const excluded = new Set();
       if (els.skipSeen.checked) {
         for (let i = 0; i < graph.signs.length; i++) {
-          if (i !== seedIdx && store.isSeen(graph.signs[i].id)) excluded.add(i);
+          if (store.isSeen(graph.signs[i].id)) excluded.add(i);
         }
       }
-      route = buildRoute(graph, shortest, seedIdx, {
+      route = buildRoute(graph, shortest, seed.node, {
         maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
         maxCount: mode === "count" ? +els.slider.value : Infinity,
         excluded,
@@ -546,17 +737,25 @@ export function createRoutePlanner({ store }) {
 
   function renderResult() {
     const km = route.totalMeters / 1000;
-    if (route.stops.length < 2) {
+    if (!route.stopSigns.length) {
       els.summary.textContent = "No reachable signs fit that budget - loosen it or pick another start.";
       els.stops.hidden = true;
+      els.actions.hidden = true;
       route = null;
       routePath = null;
       return;
     }
     els.summary.textContent =
-      `${route.stops.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`;
+      `${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`;
+    els.actions.hidden = false;
     els.stops.innerHTML = "";
-    for (const si of route.stops) {
+    if (!seed.isSign) {
+      const li = document.createElement("li");
+      li.className = "stop-start";
+      li.textContent = `Start - ${seed.label}`;
+      els.stops.appendChild(li);
+    }
+    for (const si of route.stopSigns) {
       const s = graph.signs[si];
       const li = document.createElement("li");
       li.textContent = s.addr;
@@ -572,16 +771,65 @@ export function createRoutePlanner({ store }) {
     els.stops.hidden = false;
   }
 
+  // ---------- GPX export ----------
+
+  function xmlEscape(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  els.exportGpx.addEventListener("click", () => {
+    if (!route || !graph) return;
+    const lonOf = (n) => (graph.xs[n] / graph.kx).toFixed(6);
+    const latOf = (n) => graph.ys[n].toFixed(6);
+    const km = (route.totalMeters / 1000).toFixed(1);
+    const name = `Sign Safari - ${route.stopSigns.length} signs, ${km} km`;
+
+    const wpts = route.stopSigns.map((si, i) => {
+      const s = graph.signs[si];
+      return `  <wpt lat="${latOf(s.n)}" lon="${lonOf(s.n)}"><name>${i + 1}. ${xmlEscape(s.addr)}</name></wpt>`;
+    });
+    const trkpts = route.pathNodes.map(
+      (n) => `      <trkpt lat="${latOf(n)}" lon="${lonOf(n)}"/>`
+    );
+    const gpx = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<gpx version="1.1" creator="Sign Safari" xmlns="http://www.topografix.com/GPX/1/1">',
+      `  <metadata><name>${xmlEscape(name)}</name></metadata>`,
+      ...wpts,
+      "  <trk>",
+      `    <name>${xmlEscape(name)}</name>`,
+      "    <trkseg>",
+      ...trkpts,
+      "    </trkseg>",
+      "  </trk>",
+      "</gpx>",
+      "",
+    ].join("\n");
+
+    const blob = new Blob([gpx], { type: "application/gpx+xml" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `sign-safari-${route.stopSigns.length}-signs.gpx`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    showToast("GPX saved - import it as a course/route on your watch.");
+  });
+
   // ---------- Lifecycle ----------
 
   new ResizeObserver(resize).observe(els.canvas);
   sliderConfig();
   els.budgetLabel.textContent = budgetText();
 
+  let introSeen = false;
+  try { introSeen = localStorage.getItem(INTRO_KEY) === "1"; } catch {}
+  setStep(introSeen ? "start" : "intro");
+
   return {
     load,
     show() {
       els.view.hidden = false;
+      if (currentStep() === "start" && !seed) els.hint.textContent = "You can also just tap a sign dot";
       load().then(() => {
         resize();
         scheduleDraw();

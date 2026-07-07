@@ -9,10 +9,12 @@ Each sign's card also takes the code word printed on the physical sign; the
 progress panel's "Copy code list" button exports all collected codes for
 redeeming at play.aadl.org. No backend server; everything lives in `docs/`.
 
-The Route tab plans walking routes along real streets: tap a sign to start,
-pick a distance or sign-count budget, and it greedily collects nearby signs
-and 2-opts the visiting order (`docs/js/route.js`, all client-side over the
-prebuilt street network in `docs/data/network.json`).
+The Route tab plans walking routes along real streets: start from your
+location, a searched address, or any tapped sign, pick a distance or
+sign-count budget, and it greedily collects nearby signs and 2-opts the
+visiting order (`docs/js/route.js`, all client-side over the prebuilt street
+network in `docs/data/network.json`). Routes export as GPX (waypoints per
+stop + the full track) for Garmin/Apple Watch/Strava.
 
 ## Run locally
 
