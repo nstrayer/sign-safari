@@ -1183,3 +1183,18 @@ body.route-mode .search-wrap { display: none; }
 }
 
 .route-stops li.stop-start:last-child::before { content: "F"; }
+
+.route-summary.building::after {
+  content: "";
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-left: 8px;
+  border: 2px solid var(--peri);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: route-spin 0.7s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes route-spin { to { transform: rotate(360deg); } }

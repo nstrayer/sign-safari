@@ -156,36 +156,41 @@ function makeDijkstraCache(graph, cap = 48) {
 // geolocation/address). A sign sitting exactly at the seed is simply the
 // first greedy pick at 0 m. With `loop`, the route returns to the seed and
 // the budget covers the leg home.
-function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded, loop }) {
-  const { signs } = graph;
-  // Distances from a node to all signs, as compact per-stop rows.
+//
+// The build is split into pieces so the UI can narrate and animate it:
+// greedy draft first, then a 2-opt generator that yields after every
+// accepted improvement.
+
+// Per-build cache of "distance from node X to every sign" rows.
+function makeRows(graph, shortest) {
   const rows = new Map();
-  const rowFor = (node) => {
+  return (node) => {
     if (!rows.has(node)) {
       const { dist } = shortest(node);
-      const row = new Float32Array(signs.length);
-      for (let j = 0; j < signs.length; j++) row[j] = dist[signs[j].n];
+      const row = new Float32Array(graph.signs.length);
+      for (let j = 0; j < graph.signs.length; j++) row[j] = dist[graph.signs[j].n];
       rows.set(node, row);
     }
     return rows.get(node);
   };
+}
 
+// Greedy draft: from the seed, repeatedly walk to the nearest sign that
+// still fits the budget (including, for loops, the return leg home; the
+// undirected graph makes the seed's own row double as "distance home").
+function greedyRoute(graph, rowFor, seedNode, { maxMeters, maxCount, excluded, loop }) {
+  const { signs } = graph;
+  const homeRow = rowFor(seedNode);
   const stopSigns = []; // sign indices in visit order
   const todo = new Set();
   for (let i = 0; i < signs.length; i++) {
     if (!excluded.has(i)) todo.add(i);
   }
 
-  // Distance from the seed to each sign; undirected graph, so this is also
-  // each sign's cost of the leg back home when looping.
-  const homeRow = rowFor(seedNode);
-
   let total = 0;
   let cursor = seedNode;
   while (todo.size && stopSigns.length < maxCount) {
     const row = rowFor(cursor);
-    // Nearest candidate that still fits the budget (including, for loops,
-    // the return leg from that candidate).
     let best = -1, bestD = Infinity;
     for (const c of todo) {
       if (row[c] >= bestD) continue;
@@ -199,14 +204,21 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded, 
     total += bestD;
     cursor = signs[best].n;
   }
+  if (loop && stopSigns.length) total += homeRow[stopSigns[stopSigns.length - 1]];
+  return { stopSigns, totalMeters: total };
+}
 
-  // 2-opt with the seed as a fixed anchor before position 0: reverse
-  // segments while the path (plus the leg home, when looping) gets shorter.
+// 2-opt with the seed as a fixed anchor: reverse segments while the path
+// (plus the leg home, when looping) gets shorter. Mutates stopSigns and
+// yields after each accepted reversal so the caller can animate it.
+function* twoOptSteps(graph, rowFor, seedNode, stopSigns, loop) {
+  const { signs } = graph;
+  const homeRow = rowFor(seedNode);
   const nodeOf = (p) => (p < 0 ? seedNode : signs[stopSigns[p]].n);
   const D = (p, signPos) => rowFor(nodeOf(p))[stopSigns[signPos]];
-  let improved = stopSigns.length > 1;
-  while (improved) {
-    improved = false;
+  let saved = 0;
+  for (let pass = 1; pass <= 10; pass++) {
+    let improved = false;
     for (let i = 0; i < stopSigns.length - 1; i++) {
       for (let j = i + 1; j < stopSigns.length; j++) {
         let delta = D(i - 1, j) - D(i - 1, i);
@@ -215,34 +227,32 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded, 
         if (delta < -0.01) {
           let lo = i, hi = j;
           while (lo < hi) { const t = stopSigns[lo]; stopSigns[lo++] = stopSigns[hi]; stopSigns[hi--] = t; }
+          saved -= delta;
           improved = true;
+          yield { pass, saved };
         }
       }
     }
+    if (!improved) break;
   }
+}
 
-  total = 0;
-  for (let i = 0; i < stopSigns.length; i++) total += D(i - 1, i);
-  if (loop && stopSigns.length) total += homeRow[stopSigns[stopSigns.length - 1]];
-
-  // Node path for each leg, walking prev[] back from the leg's end.
-  const pathNodes = [];
-  for (let i = 0; i < stopSigns.length; i++) {
-    const { prev } = shortest(nodeOf(i - 1));
+// Street-node path for the current stop order: one leg per stop, walking
+// prev[] back from each leg's end, plus the leg home when looping.
+function legsForOrder(graph, shortest, seedNode, stopSigns, loop) {
+  const targets = stopSigns.map((si) => graph.signs[si].n);
+  if (loop && stopSigns.length) targets.push(seedNode);
+  const legs = [];
+  let from = seedNode;
+  for (const to of targets) {
+    const { prev } = shortest(from);
     const leg = [];
-    for (let v = nodeOf(i); v !== -1; v = prev[v]) leg.push(v);
+    for (let v = to; v !== -1; v = prev[v]) leg.push(v);
     leg.reverse();
-    pathNodes.push(...(i === 0 ? leg : leg.slice(1)));
+    legs.push(leg);
+    from = to;
   }
-  if (loop && stopSigns.length) {
-    const { prev } = shortest(nodeOf(stopSigns.length - 1));
-    const leg = [];
-    for (let v = seedNode; v !== -1; v = prev[v]) leg.push(v);
-    leg.reverse();
-    pathNodes.push(...leg.slice(1));
-  }
-
-  return { stopSigns, totalMeters: total, pathNodes };
+  return legs;
 }
 
 // ---------- View ----------
@@ -483,9 +493,11 @@ export function createRoutePlanner({ store, showToast }) {
       }
     }
 
-    // Route stops: numbered, in visit order.
+    // Route stops: numbered, in visit order. During the build animation
+    // `shown` limits badges to the stops collected so far.
     if (route) {
-      for (let i = 0; i < route.stopSigns.length; i++) {
+      const count = route.shown ?? route.stopSigns.length;
+      for (let i = 0; i < count; i++) {
         const s = graph.signs[route.stopSigns[i]];
         const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
         const isStart = i === 0 && s.n === seed.node;
@@ -725,48 +737,111 @@ export function createRoutePlanner({ store, showToast }) {
 
   // ---------- Build + result ----------
 
+  let buildGen = 0;
+
+  function pathFromNodes(nodes) {
+    const p = new Path2D();
+    nodes.forEach((n, i) => {
+      if (i === 0) p.moveTo(graph.xs[n], graph.ys[n]);
+      else p.lineTo(graph.xs[n], graph.ys[n]);
+    });
+    return p;
+  }
+
+  function setStatus(text) {
+    els.summary.hidden = false;
+    els.summary.textContent = text;
+  }
+
   function rebuild() {
     if (!seed || !graph) return;
-    els.summary.hidden = false;
-    els.summary.textContent = "Building route...";
+    const gen = ++buildGen;
+    els.summary.classList.add("building");
+    setStatus("Measuring the streets nearby...");
     els.stops.hidden = true;
     els.actions.hidden = true;
     // Let the status paint before the synchronous Dijkstra work starts.
-    setTimeout(() => {
-      if (!seed) return;
-      const excluded = new Set();
-      if (els.skipSeen.checked) {
-        for (let i = 0; i < graph.signs.length; i++) {
-          if (store.isSeen(graph.signs[i].id)) excluded.add(i);
-        }
+    setTimeout(() => runBuild(gen).catch(console.error), 30);
+  }
+
+  // The narrated build: greedy draft, reveal it leg by leg, then watch
+  // 2-opt untangle the crossings pass by pass.
+  async function runBuild(gen) {
+    const alive = () => gen === buildGen && !!seed && !!graph;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    if (!alive()) return;
+
+    const excluded = new Set();
+    if (els.skipSeen.checked) {
+      for (let i = 0; i < graph.signs.length; i++) {
+        if (store.isSeen(graph.signs[i].id)) excluded.add(i);
       }
-      route = buildRoute(graph, shortest, seed.node, {
-        maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
-        maxCount: mode === "count" ? +els.slider.value : Infinity,
-        excluded,
-        loop: els.loopBack.checked,
-      });
-      routePath = new Path2D();
-      route.pathNodes.forEach((n, i) => {
-        if (i === 0) routePath.moveTo(graph.xs[n], graph.ys[n]);
-        else routePath.lineTo(graph.xs[n], graph.ys[n]);
-      });
-      renderResult();
-      if (route) fitToRoute();
+    }
+    const loop = els.loopBack.checked;
+    const rowFor = makeRows(graph, shortest);
+    const draft = greedyRoute(graph, rowFor, seed.node, {
+      maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
+      maxCount: mode === "count" ? +els.slider.value : Infinity,
+      excluded,
+      loop,
+    });
+    if (!alive()) return;
+    if (!draft.stopSigns.length) {
+      els.summary.classList.remove("building");
+      setStatus("No reachable signs fit that budget - loosen it or pick another start.");
+      route = null;
+      routePath = null;
       scheduleDraw();
-    }, 30);
+      return;
+    }
+
+    const stopSigns = draft.stopSigns;
+    let legs = legsForOrder(graph, shortest, seed.node, stopSigns, loop);
+    route = { stopSigns, totalMeters: draft.totalMeters, pathNodes: legs.flat(), shown: 0 };
+    routePath = new Path2D();
+    fitToRoute();
+    scheduleDraw();
+
+    // Reveal the draft leg by leg.
+    const revealDelay = Math.min(80, Math.max(25, 1400 / legs.length));
+    for (let i = 0; i < legs.length; i++) {
+      for (let k = 0; k < legs[i].length; k++) {
+        const n = legs[i][k];
+        if (i === 0 && k === 0) routePath.moveTo(graph.xs[n], graph.ys[n]);
+        else routePath.lineTo(graph.xs[n], graph.ys[n]);
+      }
+      route.shown = Math.min(i + 1, stopSigns.length);
+      setStatus(
+        loop && i === legs.length - 1
+          ? "...and back to the start"
+          : `Collecting signs... ${i + 1} of ${stopSigns.length}`
+      );
+      scheduleDraw();
+      await sleep(revealDelay);
+      if (!alive()) return;
+    }
+    route.shown = undefined;
+
+    // Watch 2-opt untangle the route.
+    for (const step of twoOptSteps(graph, rowFor, seed.node, stopSigns, loop)) {
+      legs = legsForOrder(graph, shortest, seed.node, stopSigns, loop);
+      route.totalMeters = draft.totalMeters - step.saved;
+      route.pathNodes = legs.flat();
+      routePath = pathFromNodes(route.pathNodes);
+      setStatus(`Untangling the route - pass ${step.pass}, saved ${Math.round(step.saved)} m`);
+      scheduleDraw();
+      await sleep(90);
+      if (!alive()) return;
+    }
+
+    els.summary.classList.remove("building");
+    renderResult();
+    fitToRoute();
+    scheduleDraw();
   }
 
   function renderResult() {
     const km = route.totalMeters / 1000;
-    if (!route.stopSigns.length) {
-      els.summary.textContent = "No reachable signs fit that budget - loosen it or pick another start.";
-      els.stops.hidden = true;
-      els.actions.hidden = true;
-      route = null;
-      routePath = null;
-      return;
-    }
     els.summary.textContent =
       `${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`;
     els.actions.hidden = false;
