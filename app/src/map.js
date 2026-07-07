@@ -1,5 +1,7 @@
 // Map setup: basemap, heatmap/circle cross-fade, biz + badge layers, tap handling.
 
+import maplibregl from "maplibre-gl";
+
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 // Swap in if OpenFreeMap is ever down:
 const CARTO_FALLBACK_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";

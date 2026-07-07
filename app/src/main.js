@@ -1,3 +1,6 @@
+import "maplibre-gl/dist/maplibre-gl.css";
+import "./styles.css";
+
 import { createStore } from "./store.js";
 import { createSignMap } from "./map.js";
 import { createSearch } from "./search.js";

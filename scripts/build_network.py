@@ -1,4 +1,5 @@
-"""Builds docs/data/network.json: the city-wide walking street network with
+"""Builds app/public/data/network.json (copied into docs/data/ by the Vite
+build): the city-wide walking street network with
 every lawn sign snapped in as its own node, consumed by the app's route
 planner tab.
 
@@ -27,7 +28,7 @@ import osmnx as ox
 from shapely.geometry import LineString, Point
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "docs" / "data" / "network.json"
+OUT = ROOT / "app" / "public" / "data" / "network.json"
 PAD = 0.003  # degrees (~300 m) of network beyond the outermost kept signs
 
 # A handful of signs sit far outside town (toward Detroit / Belleville); a
@@ -59,7 +60,7 @@ def edge_line(streets, u, v, k):
 
 
 def main():
-    signs_fc = json.loads((ROOT / "docs" / "data" / "signs.json").read_text())
+    signs_fc = json.loads((ROOT / "app" / "public" / "data" / "signs.json").read_text())
     all_feats = signs_fc["features"]
     feats = [
         f for f in all_feats

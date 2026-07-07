@@ -1,5 +1,6 @@
 """Converts summer_game_2026_raw.json (AADL Summer Game map API dump) into
-compact GeoJSON files consumed by the web app in docs/data/.
+compact GeoJSON files consumed by the web app in app/public/data/ (Vite
+copies them into docs/data/ at build time).
 
 Usage: python3 scripts/prepare_data.py
 
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT_DIR = ROOT / "docs" / "data"
+OUT_DIR = ROOT / "app" / "public" / "data"
 
 # Michigan-area sanity bbox; drops the handful of corrupt-coordinate records.
 BBOX = {"lat_min": 41.5, "lat_max": 43.5, "lon_min": -85.0, "lon_max": -83.0}
