@@ -14,6 +14,7 @@
 // nearest-unvisited walk from the seed until the budget runs out, then
 // 2-opt to untangle the visiting order.
 
+import { dataUrl } from "./data";
 import { el } from "./dom";
 import type { LonLat, NetworkData, NetworkSign, PhotonResponse } from "./types";
 import type { Store } from "./store";
@@ -489,7 +490,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function load(): Promise<void> {
     if (!loadPromise) {
-      loadPromise = fetch("./data/network.json")
+      loadPromise = fetch(dataUrl("network.json"))
         .then((res) => {
           if (!res.ok) throw new Error(`network.json: ${res.status}`);
           return res.json() as Promise<NetworkData>;

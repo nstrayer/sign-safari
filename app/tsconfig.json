@@ -13,10 +13,7 @@
     "noFallthroughCasesInSwitch": true,
 
     "noEmit": true,
-    "skipLibCheck": true,
-
-    // Dropped once the last module converts (phase 2 transition only).
-    "allowJs": true
+    "skipLibCheck": true
   },
   "include": ["src"]
 }
