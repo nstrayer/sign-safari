@@ -2,6 +2,7 @@ import { createStore } from "./store.js";
 import { createSignMap } from "./map.js";
 import { createSearch } from "./search.js";
 import { createUi, createWelcome } from "./ui.js";
+import { createRoutePlanner } from "./route.js";
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -77,6 +78,21 @@ async function main() {
     { fc: signs, kind: "sign" },
     { fc: biz, kind: "biz" },
   ]);
+
+  // Route planner tab. The street network only loads when first opened.
+  const routePlanner = createRoutePlanner({ store });
+  const viewBtns = document.querySelectorAll(".view-btn");
+  function setView(view) {
+    document.body.classList.toggle("route-mode", view === "route");
+    for (const b of viewBtns) b.classList.toggle("is-active", b.dataset.view === view);
+    if (view === "route") {
+      ui.closeSheet();
+      routePlanner.show();
+    } else {
+      routePlanner.hide();
+    }
+  }
+  for (const b of viewBtns) b.addEventListener("click", () => setView(b.dataset.view));
 
   signMap.onLoad(() => {
     signMap.addLayers({ signs, biz, badges });

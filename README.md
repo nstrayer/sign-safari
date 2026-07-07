@@ -9,6 +9,11 @@ Each sign's card also takes the code word printed on the physical sign; the
 progress panel's "Copy code list" button exports all collected codes for
 redeeming at play.aadl.org. No backend server; everything lives in `docs/`.
 
+The Route tab plans walking routes along real streets: tap a sign to start,
+pick a distance or sign-count budget, and it greedily collects nearby signs
+and 2-opts the visiting order (`docs/js/route.js`, all client-side over the
+prebuilt street network in `docs/data/network.json`).
+
 ## Run locally
 
 ```sh
@@ -33,6 +38,18 @@ context, which the geolocate button requires.)
    It rewrites `docs/data/signs.json`, `docs/data/biz.json`, and
    `docs/data/badges.json`, prints kept/dropped counts, and stamps the files
    with a `generated` date shown in the app's progress panel.
+
+3. Rebuild the route planner's street network (needs the Python env in
+   `.venv`; see `sign_network.qmd` for the underlying approach):
+
+   ```sh
+   .venv/bin/python scripts/build_network.py
+   ```
+
+   It downloads the OpenStreetMap walking network (cached in `cache/`),
+   splits street edges at each sign's closest point on the road, and writes
+   `docs/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside the
+   Ann Arbor/Ypsilanti core bbox are left out of the route planner.
 
 ## Notes
 

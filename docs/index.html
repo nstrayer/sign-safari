@@ -15,7 +15,7 @@
 
   <link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet" />
   <!-- ?v= busts stale caches so the HTML and CSS/JS never mix across deploys. -->
-  <link href="css/styles.css?v=2" rel="stylesheet" />
+  <link href="css/styles.css?v=3" rel="stylesheet" />
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -41,6 +41,33 @@
       </span>
     </button>
   </header>
+
+  <nav class="view-switch" aria-label="View">
+    <button class="view-btn is-active" data-view="map">Map</button>
+    <button class="view-btn" data-view="route">Route</button>
+  </nav>
+
+  <!-- Route planner view -->
+  <section class="route-view" id="routeView" hidden aria-label="Route planner">
+    <canvas id="routeCanvas"></canvas>
+    <div class="route-hint" id="routeHint">Tap a sign to start a route</div>
+    <div class="route-card">
+      <div class="route-row">
+        <div class="mode-toggle" role="group" aria-label="Route budget type">
+          <button class="mode-btn is-active" id="modeDistance">Distance</button>
+          <button class="mode-btn" id="modeCount">Sign count</button>
+        </div>
+        <label class="skip-row"><input type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
+      </div>
+      <div class="route-row">
+        <input type="range" id="budgetSlider" min="0.5" max="15" step="0.5" value="3" aria-label="Route budget" />
+        <span class="budget-label" id="budgetLabel">3.0 km</span>
+      </div>
+      <p class="route-summary" id="routeSummary" hidden></p>
+      <ol class="route-stops" id="routeStops" hidden></ol>
+    </div>
+    <div class="route-loading" id="routeLoading">Loading street network...</div>
+  </section>
 
   <div class="search-wrap" id="searchWrap">
     <div class="search-box">
@@ -139,6 +166,6 @@
   </div>
 
   <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
-  <script type="module" src="js/app.js?v=2"></script>
+  <script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>
