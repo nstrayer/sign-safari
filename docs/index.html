@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-DWDOrxdt.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-B9P4ZKnY.css">
+  <script type="module" crossorigin src="./assets/index-CW2PNZmK.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-Cc6nOX8T.css">
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -118,17 +118,17 @@
   </div>
 
   <!-- Sign detail bottom sheet -->
-  <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+  <div class="fixed inset-0 z-35 bg-transparent" id="sheetBackdrop" hidden></div>
   <section class="sheet" id="detailSheet" role="dialog" aria-modal="false" aria-label="Sign details" hidden>
     <div class="sheet-handle" aria-hidden="true"></div>
-    <div class="sheet-body">
+    <div class="px-[22px] pt-2 pb-2.5">
       <div class="sheet-kind" id="detailKind">Lawn sign</div>
-      <h2 class="sheet-addr" id="detailAddr"></h2>
-      <p class="sheet-sub" id="detailSub"></p>
-      <p class="sheet-stat" id="detailStat"></p>
-      <div class="code-row" id="codeRow">
+      <h2 class="mt-2.5 mb-0.5 font-display text-2xl leading-[1.1] font-extrabold text-navy" id="detailAddr"></h2>
+      <p class="text-sm font-semibold text-[#8c88a0]" id="detailSub"></p>
+      <p class="mt-2.5 mb-3.5 text-sm font-bold text-coral empty:hidden" id="detailStat"></p>
+      <div class="code-row mb-3 flex gap-2" id="codeRow">
         <input id="codeInput" type="text" placeholder="Code word from the sign" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code word from the sign" />
-        <button class="code-save" id="codeSave">Save</button>
+        <button class="flex-none cursor-pointer rounded-full border-none bg-navy px-5 font-display text-sm font-bold text-white active:scale-[0.96]" id="codeSave">Save</button>
       </div>
       <button class="seen-btn" id="seenBtn">Mark as seen</button>
     </div>

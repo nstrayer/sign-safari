@@ -94,13 +94,6 @@ html, body {
 
 /* ---------- Detail sheet ---------- */
 
-.sheet-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 35;
-  background: transparent;
-}
-
 .sheet {
   position: fixed;
   left: 0;
@@ -125,8 +118,6 @@ html, body {
   margin: 10px auto 2px;
 }
 
-.sheet-body { padding: 8px 22px 10px; }
-
 .sheet-kind {
   display: inline-block;
   font-family: var(--font-display);
@@ -142,37 +133,6 @@ html, body {
 
 .sheet-kind.kind-biz { background: var(--color-blue); }
 .sheet-kind.kind-badge { background: var(--color-gold); color: var(--color-navy); }
-
-.sheet-addr {
-  margin: 10px 0 2px;
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 24px;
-  line-height: 1.1;
-  color: var(--color-navy);
-}
-
-.sheet-sub {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: #8c88a0;
-}
-
-.sheet-stat {
-  margin: 10px 0 14px;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--color-coral);
-}
-
-.sheet-stat:empty { display: none; }
-
-.code-row {
-  display: flex;
-  gap: 8px;
-  margin: 0 0 12px;
-}
 
 .code-row input {
   flex: 1;
@@ -190,21 +150,6 @@ html, body {
 
 .code-row input:focus { border-color: var(--color-blue); }
 .code-row input::placeholder { font-weight: 400; color: #a4a2bd; }
-
-.code-save {
-  flex: none;
-  border: none;
-  border-radius: 999px;
-  padding: 0 20px;
-  background: var(--color-navy);
-  color: #fff;
-  font-family: var(--font-display);
-  font-size: 14px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.code-save:active { transform: scale(0.96); }
 
 .code-chip {
   display: block;
