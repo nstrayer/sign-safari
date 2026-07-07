@@ -133,8 +133,10 @@ function dijkstra(graph, src) {
   return { dist, prev };
 }
 
-// LRU cache of full Dijkstra results keyed by source node.
-function makeDijkstraCache(graph, cap = 48) {
+// LRU cache of full Dijkstra results keyed by source node. The cap needs
+// headroom for the largest routes: an 80-stop build touches ~80 sources
+// during 2-opt and leg assembly, and thrashing means recomputing them.
+function makeDijkstraCache(graph, cap = 128) {
   const cache = new Map();
   return (src) => {
     if (cache.has(src)) {
@@ -175,20 +177,23 @@ function makeRows(graph, shortest) {
   };
 }
 
-// Greedy draft: from the seed, repeatedly walk to the nearest sign that
-// still fits the budget (including, for loops, the return leg home; the
-// undirected graph makes the seed's own row double as "distance home").
-function greedyRoute(graph, rowFor, seedNode, { maxMeters, maxCount, excluded, loop }) {
+// Greedy: extend an existing stop order (possibly empty) by repeatedly
+// walking to the nearest sign that still fits the budget (including, for
+// loops, the return leg home; the undirected graph makes the seed's own
+// row double as "distance home"). Mutates stopSigns; also used to refill
+// budget freed up by 2-opt.
+function greedyExtend(graph, rowFor, seedNode, stopSigns, spentMeters, { maxMeters, maxCount, excluded, loop }) {
   const { signs } = graph;
   const homeRow = rowFor(seedNode);
-  const stopSigns = []; // sign indices in visit order
+  const used = new Set(stopSigns);
   const todo = new Set();
   for (let i = 0; i < signs.length; i++) {
-    if (!excluded.has(i)) todo.add(i);
+    if (!excluded.has(i) && !used.has(i)) todo.add(i);
   }
 
-  let total = 0;
-  let cursor = seedNode;
+  let total = spentMeters;
+  let cursor = stopSigns.length ? signs[stopSigns[stopSigns.length - 1]].n : seedNode;
+  let added = 0;
   while (todo.size && stopSigns.length < maxCount) {
     const row = rowFor(cursor);
     let best = -1, bestD = Infinity;
@@ -202,10 +207,50 @@ function greedyRoute(graph, rowFor, seedNode, { maxMeters, maxCount, excluded, l
     stopSigns.push(best);
     todo.delete(best);
     total += bestD;
+    added++;
     cursor = signs[best].n;
   }
-  if (loop && stopSigns.length) total += homeRow[stopSigns[stopSigns.length - 1]];
-  return { stopSigns, totalMeters: total };
+  return added;
+}
+
+// Path length of a stop order, with and without the loop leg home.
+function routeTotals(graph, rowFor, seedNode, stopSigns, loop) {
+  const homeRow = rowFor(seedNode);
+  let pathMeters = 0;
+  let prevNode = seedNode;
+  for (const si of stopSigns) {
+    pathMeters += rowFor(prevNode)[si];
+    prevNode = graph.signs[si].n;
+  }
+  const home = loop && stopSigns.length ? homeRow[stopSigns[stopSigns.length - 1]] : 0;
+  return { pathMeters, totalMeters: pathMeters + home };
+}
+
+// Multi-start: greedy is myopic about its opening move, so run it once for
+// each of the k nearest viable first signs and let the results race.
+// Duplicates (openers that converge to the same route) are dropped.
+function buildCandidates(graph, rowFor, seedNode, opts, k = 4) {
+  const homeRow = rowFor(seedNode);
+  const openers = [];
+  for (let i = 0; i < graph.signs.length; i++) {
+    if (opts.excluded.has(i)) continue;
+    const d = homeRow[i];
+    if (!isFinite(d) || d + (opts.loop ? homeRow[i] : 0) > opts.maxMeters) continue;
+    openers.push([d, i]);
+  }
+  openers.sort((a, b) => a[0] - b[0]);
+
+  const dedupe = new Set();
+  const candidates = [];
+  for (const [d, first] of openers.slice(0, k)) {
+    const stopSigns = [first];
+    greedyExtend(graph, rowFor, seedNode, stopSigns, d, opts);
+    const key = stopSigns.join(",");
+    if (dedupe.has(key)) continue;
+    dedupe.add(key);
+    candidates.push({ stopSigns, ...routeTotals(graph, rowFor, seedNode, stopSigns, opts.loop) });
+  }
+  return candidates;
 }
 
 // 2-opt with the seed as a fixed anchor: reverse segments while the path
@@ -296,6 +341,7 @@ export function createRoutePlanner({ store, showToast }) {
   let seed = null; // { node, label, isSign }
   let route = null;
   let routePath = null; // Path2D in world coords
+  let race = null; // [{ path, color, alpha }] while candidate routes race
   let mode = "distance"; // or "count"
   let needsDraw = false;
 
@@ -333,6 +379,7 @@ export function createRoutePlanner({ store, showToast }) {
     seed = null;
     route = null;
     routePath = null;
+    race = null;
     setStep("start");
     scheduleDraw();
   });
@@ -382,10 +429,10 @@ export function createRoutePlanner({ store, showToast }) {
     view.scale = view.fitScale;
   }
 
-  // Zoom to the built route, framed in the canvas area the card leaves free.
-  function fitToRoute() {
+  // Zoom to a set of path nodes, framed in the canvas area the card leaves free.
+  function fitToNodes(nodes) {
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    for (const n of route.pathNodes) {
+    for (const n of nodes) {
       const x = graph.xs[n], y = graph.ys[n];
       if (x < xMin) xMin = x; if (x > xMax) xMax = x;
       if (y < yMin) yMin = y; if (y > yMax) yMax = y;
@@ -483,6 +530,28 @@ export function createRoutePlanner({ store, showToast }) {
     ctx.fill(seenDots);
     ctx.fillStyle = COLORS.unseen;
     ctx.fill(unseenDots);
+
+    // Racing candidate routes go above the dots, dashed differently per
+    // candidate so overlapping stretches stay tellable-apart.
+    if (race) {
+      ctx.save();
+      ctx.translate(w / 2, h / 2);
+      ctx.scale(view.scale, -view.scale);
+      ctx.translate(-view.cx, -view.cy);
+      const dashes = [[], [10, 7], [5, 5], [2.5, 6]];
+      race.forEach((c, i) => {
+        if (c.alpha < 0.02) return;
+        ctx.globalAlpha = c.alpha;
+        ctx.lineWidth = (3.4 - i * 0.4) / view.scale;
+        ctx.setLineDash(dashes[i % 4].map((d) => d / view.scale));
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = c.color;
+        ctx.stroke(c.path);
+      });
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
 
     // Start anchor, unless the first stop sits exactly on it.
     if (seed) {
@@ -753,9 +822,18 @@ export function createRoutePlanner({ store, showToast }) {
     els.summary.textContent = text;
   }
 
+  function appendLeg(path, leg, isFirst) {
+    for (let k = 0; k < leg.length; k++) {
+      const n = leg[k];
+      if (isFirst && k === 0) path.moveTo(graph.xs[n], graph.ys[n]);
+      else path.lineTo(graph.xs[n], graph.ys[n]);
+    }
+  }
+
   function rebuild() {
     if (!seed || !graph) return;
     const gen = ++buildGen;
+    race = null;
     els.summary.classList.add("building");
     setStatus("Measuring the streets nearby...");
     els.stops.hidden = true;
@@ -764,8 +842,9 @@ export function createRoutePlanner({ store, showToast }) {
     setTimeout(() => runBuild(gen).catch(console.error), 30);
   }
 
-  // The narrated build: greedy draft, reveal it leg by leg, then watch
-  // 2-opt untangle the crossings pass by pass.
+  // The narrated build: race a few greedy starts against each other, keep
+  // the winner, watch 2-opt untangle it, then spend any budget the
+  // optimizer freed up on extra signs.
   async function runBuild(gen) {
     const alive = () => gen === buildGen && !!seed && !!graph;
     const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -778,15 +857,16 @@ export function createRoutePlanner({ store, showToast }) {
       }
     }
     const loop = els.loopBack.checked;
-    const rowFor = makeRows(graph, shortest);
-    const draft = greedyRoute(graph, rowFor, seed.node, {
+    const opts = {
       maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
       maxCount: mode === "count" ? +els.slider.value : Infinity,
       excluded,
       loop,
-    });
+    };
+    const rowFor = makeRows(graph, shortest);
+    const candidates = buildCandidates(graph, rowFor, seed.node, opts);
     if (!alive()) return;
-    if (!draft.stopSigns.length) {
+    if (!candidates.length) {
       els.summary.classList.remove("building");
       setStatus("No reachable signs fit that budget - loosen it or pick another start.");
       route = null;
@@ -795,48 +875,128 @@ export function createRoutePlanner({ store, showToast }) {
       return;
     }
 
-    const stopSigns = draft.stopSigns;
-    let legs = legsForOrder(graph, shortest, seed.node, stopSigns, loop);
-    route = { stopSigns, totalMeters: draft.totalMeters, pathNodes: legs.flat(), shown: 0 };
-    routePath = new Path2D();
-    fitToRoute();
+    // More signs wins; fewer meters breaks ties.
+    let winnerIdx = 0;
+    for (let i = 1; i < candidates.length; i++) {
+      const c = candidates[i], w = candidates[winnerIdx];
+      if (c.stopSigns.length > w.stopSigns.length ||
+          (c.stopSigns.length === w.stopSigns.length && c.totalMeters < w.totalMeters)) {
+        winnerIdx = i;
+      }
+    }
+    const candLegs = candidates.map((c) => legsForOrder(graph, shortest, seed.node, c.stopSigns, loop));
+
+    route = null;
+    routePath = null;
+    fitToNodes(candLegs.flat(2));
     scheduleDraw();
 
-    // Reveal the draft leg by leg.
-    const revealDelay = Math.min(80, Math.max(25, 1400 / legs.length));
-    for (let i = 0; i < legs.length; i++) {
-      for (let k = 0; k < legs[i].length; k++) {
-        const n = legs[i][k];
-        if (i === 0 && k === 0) routePath.moveTo(graph.xs[n], graph.ys[n]);
-        else routePath.lineTo(graph.xs[n], graph.ys[n]);
+    if (candidates.length > 1) {
+      // Phase 1: the race. All candidates snake outward together.
+      const colors = ["#d62246", "#5bc2f0", "#ffb43b", "#8b8fe0"];
+      race = candidates.map((c, i) => ({ path: new Path2D(), color: colors[i % colors.length], alpha: 0.85 }));
+      const maxLegs = Math.max(...candLegs.map((l) => l.length));
+      const delay = Math.min(150, Math.max(40, 1800 / maxLegs));
+      for (let i = 0; i < maxLegs; i++) {
+        candLegs.forEach((legs, ci) => {
+          if (i < legs.length) appendLeg(race[ci].path, legs[i], i === 0);
+        });
+        setStatus(`Trying ${candidates.length} different starts...`);
+        scheduleDraw();
+        await sleep(delay);
+        if (!alive()) return;
       }
-      route.shown = Math.min(i + 1, stopSigns.length);
-      setStatus(
-        loop && i === legs.length - 1
-          ? "...and back to the start"
-          : `Collecting signs... ${i + 1} of ${stopSigns.length}`
-      );
-      scheduleDraw();
-      await sleep(revealDelay);
-      if (!alive()) return;
-    }
-    route.shown = undefined;
 
-    // Watch 2-opt untangle the route.
-    for (const step of twoOptSteps(graph, rowFor, seed.node, stopSigns, loop)) {
-      legs = legsForOrder(graph, shortest, seed.node, stopSigns, loop);
-      route.totalMeters = draft.totalMeters - step.saved;
-      route.pathNodes = legs.flat();
+      // Phase 2: declare the winner, fade the rest.
+      const w = candidates[winnerIdx];
+      setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopSigns.length} signs, ${(w.totalMeters / 1000).toFixed(1)} km`);
+      await sleep(500);
+      if (!alive()) return;
+      for (let step = 0; step < 8; step++) {
+        race.forEach((c, i) => { if (i !== winnerIdx) c.alpha *= 0.62; });
+        scheduleDraw();
+        await sleep(55);
+        if (!alive()) return;
+      }
+      race = null;
+      route = {
+        stopSigns: candidates[winnerIdx].stopSigns,
+        totalMeters: candidates[winnerIdx].totalMeters,
+        pathNodes: candLegs[winnerIdx].flat(),
+      };
       routePath = pathFromNodes(route.pathNodes);
-      setStatus(`Untangling the route - pass ${step.pass}, saved ${Math.round(step.saved)} m`);
       scheduleDraw();
-      await sleep(90);
+      await sleep(400);
+      if (!alive()) return;
+    } else {
+      // Single viable start: reveal it leg by leg instead.
+      const stopSigns = candidates[0].stopSigns;
+      const legs = candLegs[0];
+      route = { stopSigns, totalMeters: candidates[0].totalMeters, pathNodes: legs.flat(), shown: 0 };
+      routePath = new Path2D();
+      const revealDelay = Math.min(120, Math.max(30, 1500 / legs.length));
+      for (let i = 0; i < legs.length; i++) {
+        appendLeg(routePath, legs[i], i === 0);
+        route.shown = Math.min(i + 1, stopSigns.length);
+        setStatus(
+          loop && i === legs.length - 1
+            ? "...and back to the start"
+            : `Collecting signs... ${i + 1} of ${stopSigns.length}`
+        );
+        scheduleDraw();
+        await sleep(revealDelay);
+        if (!alive()) return;
+      }
+      route.shown = undefined;
+    }
+
+    // Phase 3+4, repeated: untangle with 2-opt, then spend whatever budget
+    // the optimizer freed up on more signs, until neither helps.
+    const stopSigns = route.stopSigns;
+    const refreshRoute = () => {
+      const totals = routeTotals(graph, rowFor, seed.node, stopSigns, loop);
+      route.totalMeters = totals.totalMeters;
+      route.pathNodes = legsForOrder(graph, shortest, seed.node, stopSigns, loop).flat();
+      routePath = pathFromNodes(route.pathNodes);
+      return totals;
+    };
+
+    setStatus("Checking for crossings...");
+    await sleep(450);
+    if (!alive()) return;
+
+    for (let round = 1; round <= 3; round++) {
+      let untangled = false;
+      for (const step of twoOptSteps(graph, rowFor, seed.node, stopSigns, loop)) {
+        untangled = true;
+        refreshRoute();
+        setStatus(`Untangling the route - pass ${step.pass}, saved ${Math.round(step.saved)} m`);
+        scheduleDraw();
+        await sleep(90);
+        if (!alive()) return;
+      }
+      if (round === 1 && !untangled) {
+        setStatus("No crossings - clean route");
+        scheduleDraw();
+        await sleep(500);
+        if (!alive()) return;
+      }
+
+      if (mode !== "distance") break;
+      const totals = refreshRoute();
+      const added = greedyExtend(graph, rowFor, seed.node, stopSigns, totals.pathMeters, opts);
+      if (!added) break;
+      refreshRoute();
+      setStatus(`Leftover budget - adding ${added} more sign${added > 1 ? "s" : ""}...`);
+      scheduleDraw();
+      await sleep(700);
       if (!alive()) return;
     }
 
+    refreshRoute();
     els.summary.classList.remove("building");
     renderResult();
-    fitToRoute();
+    fitToNodes(route.pathNodes);
     scheduleDraw();
   }
 
