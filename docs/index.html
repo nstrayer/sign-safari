@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-BuCJu2e9.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-7qea0CTW.css">
+  <script type="module" crossorigin src="./assets/index-C1kZj2m1.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-BhiN9Jis.css">
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -181,27 +181,27 @@
 
       <p class="mt-[22px] mb-0.5 text-xs text-[#a09dba]" id="dataStamp"></p>
       <p class="mt-0.5 text-xs text-[#a09dba]">Sign data from the <a class="font-bold text-peri" href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
-      <button class="about-link" id="aboutBtn">How does this app work?</button>
+      <button class="mt-2.5 cursor-pointer border-none bg-transparent p-0 font-body text-xs font-bold text-peri underline" id="aboutBtn">How does this app work?</button>
     </div>
   </section>
 
   <!-- Welcome / info modal -->
-  <div class="welcome-backdrop" id="welcomeBackdrop" hidden></div>
-  <section class="welcome" id="welcomePanel" role="dialog" aria-modal="true" aria-label="About Sign Safari" hidden>
-    <h2>Welcome to Sign Safari!</h2>
-    <p class="welcome-intro">A map of every Summer Game lawn sign in Ann Arbor, so you can plan a route and keep track of the ones you've found.</p>
-    <ul class="welcome-list">
-      <li><span class="welcome-dot"></span><span>Every dot is a lawn sign. Tap one to see its address.</span></li>
-      <li><span class="welcome-dot dot-seen"></span><span>Found it in real life? Mark it seen and type in the code word from the sign.</span></li>
-      <li><span class="welcome-dot dot-gold"></span><span>Tap your progress (top right) to copy your code list and redeem it at play.aadl.org.</span></li>
+  <div class="fixed inset-0 z-[68] bg-navy-deep/45" id="welcomeBackdrop" hidden></div>
+  <section class="fixed top-1/2 left-1/2 z-70 max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[22px] bg-cream px-6 pt-6 pb-[22px] shadow-[0_12px_40px_rgba(38,40,72,0.35)]" id="welcomePanel" role="dialog" aria-modal="true" aria-label="About Sign Safari" hidden>
+    <h2 class="mb-2 font-display text-[26px] leading-[1.1] font-extrabold text-navy">Welcome to Sign Safari!</h2>
+    <p class="mb-3.5 text-[14.5px] leading-[1.45] font-semibold text-ink">A map of every Summer Game lawn sign in Ann Arbor, so you can plan a route and keep track of the ones you've found.</p>
+    <ul class="mb-3.5 list-none">
+      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-coral shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(232,112,74,0.35)]"></span><span>Every dot is a lawn sign. Tap one to see its address.</span></li>
+      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-green shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(67,168,96,0.35)]"></span><span>Found it in real life? Mark it seen and type in the code word from the sign.</span></li>
+      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-gold shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(255,180,59,0.35)]"></span><span>Tap your progress (top right) to copy your code list and redeem it at play.aadl.org.</span></li>
     </ul>
-    <p class="welcome-note">Progress is saved only in this browser. Not an official AADL app.</p>
-    <button class="welcome-go" id="welcomeGo">Start exploring</button>
+    <p class="mb-4 text-[12.5px] text-[#8c88a0]">Progress is saved only in this browser. Not an official AADL app.</p>
+    <button class="w-full cursor-pointer rounded-full border-none bg-coral p-3.5 font-display text-base font-bold text-white shadow-[0_4px_14px_rgba(232,112,74,0.45)] transition-transform duration-[120ms] active:scale-[0.97]" id="welcomeGo">Start exploring</button>
   </section>
 
   <div class="toast" id="toast" hidden>
     <span id="toastMsg"></span>
-    <button id="toastUndo" class="toast-undo" hidden>Undo</button>
+    <button id="toastUndo" class="cursor-pointer border-none bg-transparent p-0 font-display text-[14.5px] font-extrabold text-gold" hidden>Undo</button>
   </div>
 
 </body>
