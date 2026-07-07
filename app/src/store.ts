@@ -10,20 +10,56 @@ const SETTINGS_KEY = "sg2026.settings";
 const VERSION_KEY = "sg2026.v";
 const WELCOMED_KEY = "sg2026.welcomed";
 
-const DEFAULT_SETTINGS = { hideSeen: false, showBiz: true, showBadges: false };
+export interface Settings {
+  hideSeen: boolean;
+  showBiz: boolean;
+  showBadges: boolean;
+}
 
-function readJson(key, fallback) {
+export type SeenListener = (id: string, isSeen: boolean) => void;
+export type SettingsListener = (settings: Settings) => void;
+
+export interface Store {
+  isSeen(id: string): boolean;
+  seenAt(id: string): number | undefined;
+  count(): number;
+  countToday(): number;
+  all(): Record<string, number>;
+  seenIds(): string[];
+  /** Most recently marked first. */
+  recent(limit?: number): { id: string; at: number }[];
+  toggle(id: string): boolean;
+  getCode(id: string): string;
+  /** Recording a code implies the sign was seen. */
+  setCode(id: string, code: string): void;
+  codeCount(): number;
+  /** Codes ordered by when their sign was marked seen (oldest first). */
+  allCodes(): { id: string; code: string; at: number }[];
+  setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void;
+  settings(): Settings;
+  wasWelcomed(): boolean;
+  setWelcomed(): void;
+  onSeenChange(fn: SeenListener): void;
+  onSettingsChange(fn: SettingsListener): void;
+  exportJson(): string;
+  /** Merges a backup; returns how many new ids were added. Throws on junk. */
+  importJson(text: string): number;
+}
+
+const DEFAULT_SETTINGS: Settings = { hideSeen: false, showBiz: true, showBadges: false };
+
+function readJson<T extends object>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    const val = JSON.parse(raw);
-    return val && typeof val === "object" ? val : fallback;
+    const val: unknown = JSON.parse(raw);
+    return val && typeof val === "object" ? (val as T) : fallback;
   } catch {
     return fallback;
   }
 }
 
-function writeJson(key, value) {
+function writeJson(key: string, value: object): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
   } catch (e) {
@@ -31,16 +67,16 @@ function writeJson(key, value) {
   }
 }
 
-export function createStore() {
-  let seen = readJson(SEEN_KEY, {});
-  let codes = readJson(CODES_KEY, {});
-  let settings = { ...DEFAULT_SETTINGS, ...readJson(SETTINGS_KEY, {}) };
+export function createStore(): Store {
+  let seen = readJson<Record<string, number>>(SEEN_KEY, {});
+  const codes = readJson<Record<string, string>>(CODES_KEY, {});
+  let settings: Settings = { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>(SETTINGS_KEY, {}) };
   try { localStorage.setItem(VERSION_KEY, "1"); } catch {}
 
-  const seenSubs = new Set();
-  const settingsSubs = new Set();
+  const seenSubs = new Set<SeenListener>();
+  const settingsSubs = new Set<SettingsListener>();
 
-  function notifySeen(id, isSeen) {
+  function notifySeen(id: string, isSeen: boolean): void {
     for (const fn of seenSubs) fn(id, isSeen);
   }
 
@@ -54,7 +90,6 @@ export function createStore() {
     },
     all: () => ({ ...seen }),
     seenIds: () => Object.keys(seen),
-    // Most recently marked first.
     recent(limit = 20) {
       return Object.entries(seen)
         .sort((a, b) => b[1] - a[1])
@@ -70,7 +105,6 @@ export function createStore() {
       return nowSeen;
     },
     getCode: (id) => codes[id] ?? "",
-    // Recording a code implies the sign was seen.
     setCode(id, code) {
       code = String(code ?? "").trim();
       if (code) {
@@ -84,7 +118,6 @@ export function createStore() {
       notifySeen(id, Object.hasOwn(seen, id));
     },
     codeCount: () => Object.keys(codes).length,
-    // Codes ordered by when their sign was marked seen (oldest first).
     allCodes() {
       return Object.entries(codes)
         .map(([id, code]) => ({ id, code, at: seen[id] ?? 0 }))
@@ -106,9 +139,11 @@ export function createStore() {
     onSettingsChange(fn) { settingsSubs.add(fn); },
     exportJson: () => JSON.stringify({ v: 1, seen, codes }),
     importJson(text) {
-      const data = JSON.parse(text);
-      const incoming = data && typeof data.seen === "object" && data.seen !== null ? data.seen : null;
-      if (!incoming) throw new Error("Not a Sign Safari backup");
+      const data: unknown = JSON.parse(text);
+      if (!data || typeof data !== "object") throw new Error("Not a Sign Safari backup");
+      const backup = data as { seen?: unknown; codes?: unknown };
+      if (!backup.seen || typeof backup.seen !== "object") throw new Error("Not a Sign Safari backup");
+      const incoming = backup.seen as Record<string, unknown>;
       const merged = { ...seen };
       let added = 0;
       for (const [id, at] of Object.entries(incoming)) {
@@ -117,8 +152,8 @@ export function createStore() {
         merged[id] = merged[id] ? Math.min(merged[id], at) : at;
       }
       seen = merged;
-      if (data.codes && typeof data.codes === "object") {
-        for (const [id, code] of Object.entries(data.codes)) {
+      if (backup.codes && typeof backup.codes === "object") {
+        for (const [id, code] of Object.entries(backup.codes as Record<string, unknown>)) {
           if (typeof code === "string" && code.trim()) codes[id] = code.trim();
         }
         writeJson(CODES_KEY, codes);
