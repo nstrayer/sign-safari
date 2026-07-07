@@ -7,24 +7,46 @@ A static web app showing a heat map of AADL Summer Game 2026 lawn signs, with
 address/GPS search and personal "seen it" tracking stored in localStorage.
 Each sign's card also takes the code word printed on the physical sign; the
 progress panel's "Copy code list" button exports all collected codes for
-redeeming at play.aadl.org. No backend server; everything lives in `docs/`.
+redeeming at play.aadl.org. No backend server.
 
 The Route tab plans walking routes along real streets: start from your
 location, a searched address, or any tapped sign, pick a distance or
 sign-count budget, and it greedily collects nearby signs and 2-opts the
-visiting order (`docs/js/route.js`, all client-side over the prebuilt street
-network in `docs/data/network.json`). Routes export as GPX (waypoints per
-stop + the full track) for Garmin/Apple Watch/Strava.
+visiting order (`app/src/route.ts`, all client-side over the prebuilt street
+network in `app/public/data/network.json`). Routes export as GPX (waypoints
+per stop + the full track) for Garmin/Apple Watch/Strava.
 
-## Run locally
+## Layout
+
+- `app/` - the source: a Vite + TypeScript project (strict, no framework;
+  Tailwind v4 for the UI chrome, hand CSS for the brand treatment, canvas
+  views, and MapLibre overrides). Data files live in `app/public/data/`.
+- `docs/` - **committed build output**, served as-is by GitHub Pages. Never
+  hand-edit it: every `npm run build` empties and regenerates it.
+- `scripts/` - the Python data pipeline (below).
+
+## Develop
 
 ```sh
-python3 -m http.server 8000 --directory docs
+cd app
+npm install
+npm run dev        # http://localhost:5173, HMR
 ```
 
-Then open http://localhost:8000. (Must be served over http, not opened as a
-file, so the app can fetch its data files; localhost also counts as a secure
-context, which the geolocate button requires.)
+## Build & deploy
+
+```sh
+cd app
+npm run build      # typechecks (tsc --noEmit), then rebuilds docs/
+```
+
+Commit the regenerated `docs/` together with the source changes and push to
+`main` - that is the whole deploy. To preview the exact production build:
+`npm run preview`, or serve the repo root (`python3 -m http.server 8000`) and
+open http://localhost:8000/docs/ to also exercise the subpath resolution that
+GitHub Pages uses at `/sign-safari/`. (Must be served over http, not opened
+as a file; localhost counts as a secure context, which the geolocate button
+requires.)
 
 ## Refresh the sign data
 
@@ -37,9 +59,9 @@ context, which the geolocate button requires.)
    python3 scripts/prepare_data.py
    ```
 
-   It rewrites `docs/data/signs.json`, `docs/data/biz.json`, and
-   `docs/data/badges.json`, prints kept/dropped counts, and stamps the files
-   with a `generated` date shown in the app's progress panel.
+   It rewrites `app/public/data/signs.json`, `biz.json`, and `badges.json`,
+   prints kept/dropped counts, and stamps the files with a `generated` date
+   shown in the app's progress panel.
 
 3. Rebuild the route planner's street network (needs the Python env in
    `.venv`; see `sign_network.qmd` for the underlying approach):
@@ -50,13 +72,22 @@ context, which the geolocate button requires.)
 
    It downloads the OpenStreetMap walking network (cached in `cache/`),
    splits street edges at each sign's closest point on the road, and writes
-   `docs/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside the
-   Ann Arbor/Ypsilanti core bbox are left out of the route planner.
+   `app/public/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside
+   the Ann Arbor/Ypsilanti core bbox are left out of the route planner.
+
+4. **Rebuild the app** so the refreshed data lands in `docs/data/` (editing
+   `app/public/data/` alone deploys nothing):
+
+   ```sh
+   cd app && npm run build
+   ```
+
+   Then commit and push as usual.
 
 ## Notes
 
 - Basemap: OpenFreeMap Positron (keyless). A CARTO fallback style URL is in
-  `docs/js/map.js`.
+  `app/src/map.ts`.
 - Place search: Photon (komoot.io), biased to the Ann Arbor area. Sign
   addresses are searched locally and work offline.
 - Seen progress lives only in the browser's localStorage. iOS Safari can evict
