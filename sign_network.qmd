@@ -1,0 +1,134 @@
+---
+title: "Sign network prototype"
+format:
+  html:
+    embed-resources: true
+engine: jupyter
+---
+
+Goal: treat the summer game signs and the street grid as one network.
+Intersections are nodes, street segments are edges, and each sign is its own
+node attached to the street network. This is the starting point for doing
+real routing (shortest paths, traveling-salesman style tours) along actual
+streets later.
+
+This first pass just builds the combined network for ~50 signs around the
+densest cluster (the Old West Side) and draws a plain network plot -- no
+basemap, no interactivity.
+
+```{python}
+#| label: setup
+import json
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import osmnx as ox
+```
+
+## Pick a cluster of signs
+
+Load the full sign list and grab the 50 signs closest to the middle of the
+densest cluster. The 1.35 factor roughly corrects for longitude degrees being
+shorter than latitude degrees at Ann Arbor's latitude, so "closest" is
+closest on the ground rather than in raw degrees.
+
+```{python}
+#| label: load-signs
+with open("docs/data/signs.json") as f:
+    signs_geojson = json.load(f)
+
+CLUSTER_CENTER = (-83.770, 42.285)  # lon, lat, Old West Side
+N_SIGNS = 50
+
+def ground_dist2(feature):
+    lon, lat = feature["geometry"]["coordinates"]
+    return (lon - CLUSTER_CENTER[0]) ** 2 + ((lat - CLUSTER_CENTER[1]) * 1.35) ** 2
+
+signs = sorted(signs_geojson["features"], key=ground_dist2)[:N_SIGNS]
+print(f"{len(signs_geojson['features'])} signs total, using {len(signs)}")
+```
+
+## Download the street network
+
+OpenStreetMap already stores streets in exactly the shape we want:
+intersections as nodes, street segments as edges with lengths in meters.
+`network_type="walk"` includes footpaths and ignores one-way restrictions,
+which is the right graph for sign hunting on foot.
+
+```{python}
+#| label: download-streets
+lons = [f["geometry"]["coordinates"][0] for f in signs]
+lats = [f["geometry"]["coordinates"][1] for f in signs]
+PAD = 0.002  # ~200m of margin around the signs
+
+streets = ox.graph_from_bbox(
+    (min(lons) - PAD, min(lats) - PAD, max(lons) + PAD, max(lats) + PAD),
+    network_type="walk",
+)
+print(f"street graph: {len(streets.nodes)} intersections, {len(streets.edges)} edges")
+```
+
+## Combine into one network
+
+Start from the street graph (collapsed to a simple undirected graph), tag
+every existing node as an `intersection`, then add each sign as a `sign`
+node connected to its nearest intersection by an `access` edge. Later we can
+upgrade this to split the street edge at the sign's exact position, but
+nearest-intersection is within about half a block on a walk network this
+dense.
+
+```{python}
+#| label: combine
+G = nx.Graph(streets.to_undirected())
+nx.set_node_attributes(G, "intersection", "node_type")
+nx.set_edge_attributes(G, "street", "edge_type")
+
+nearest = ox.distance.nearest_nodes(streets, X=lons, Y=lats)
+for feature, street_node in zip(signs, nearest):
+    lon, lat = feature["geometry"]["coordinates"]
+    sign_id = f"sign-{feature['properties']['id']}"
+    G.add_node(
+        sign_id,
+        node_type="sign",
+        x=lon,
+        y=lat,
+        addr=feature["properties"]["addr"],
+    )
+    G.add_edge(sign_id, street_node, edge_type="access")
+
+counts = nx.get_node_attributes(G, "node_type")
+print(f"combined graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+print(f"  {sum(t == 'intersection' for t in counts.values())} intersections")
+print(f"  {sum(t == 'sign' for t in counts.values())} signs")
+```
+
+## Plot the network
+
+Plain networkx/matplotlib plot. Node positions are just the raw coordinates
+used as layout positions -- no projection or basemap. Where a street looks
+like two or three parallel lines, that is OSM mapping the sidewalks on each
+side as their own ways; the walk network keeps them.
+
+```{python}
+#| label: fig-network
+#| fig-cap: "Street network (gray) with signs (red) attached to their nearest intersection."
+pos = {n: (d["x"], d["y"]) for n, d in G.nodes(data=True)}
+intersections = [n for n, d in G.nodes(data=True) if d["node_type"] == "intersection"]
+sign_nodes = [n for n, d in G.nodes(data=True) if d["node_type"] == "sign"]
+street_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "street"]
+access_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "access"]
+
+fig, ax = plt.subplots(figsize=(10, 10))
+nx.draw_networkx_edges(G, pos, edgelist=street_edges, edge_color="#c5c9ce", width=1, ax=ax)
+nx.draw_networkx_edges(G, pos, edgelist=access_edges, edge_color="#e4572e", width=1.5, style="dashed", ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=intersections, node_size=8, node_color="#8a919a", ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=sign_nodes, node_size=45, node_color="#e4572e", ax=ax)
+ax.set_aspect(1.35)
+ax.axis("off")
+plt.show()
+```
+
+With the combined graph in hand, the next steps are: split street edges at
+each sign's true snap point instead of the nearest intersection, compute a
+sign-to-sign shortest-path distance matrix along the streets, and run a
+TSP-style solver over it for optimal collection routes.
