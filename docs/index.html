@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-CW2PNZmK.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-Cc6nOX8T.css">
+  <script type="module" crossorigin src="./assets/index-BuCJu2e9.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-7qea0CTW.css">
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -137,26 +137,26 @@
   <!-- Progress panel -->
   <section class="panel" id="progressPanel" role="dialog" aria-modal="true" aria-label="Your progress" hidden>
     <div class="panel-header">
-      <h2>Your safari</h2>
-      <button class="panel-close" id="panelClose" aria-label="Close">&times;</button>
+      <h2 class="font-display text-2xl font-extrabold text-white">Your safari</h2>
+      <button class="h-[38px] w-[38px] cursor-pointer rounded-full border-none bg-white/14 text-[22px] leading-none text-white" id="panelClose" aria-label="Close">&times;</button>
     </div>
     <div class="panel-scroll">
-      <div class="stats-row">
-        <div class="stat-card">
-          <span class="stat-num" id="statTotal">0</span>
-          <span class="stat-label">signs seen</span>
+      <div class="grid grid-cols-3 gap-2.5">
+        <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
+          <span class="block font-display text-[26px] leading-none font-extrabold text-coral" id="statTotal">0</span>
+          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">signs seen</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-num" id="statToday">0</span>
-          <span class="stat-label">seen today</span>
+        <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
+          <span class="block font-display text-[26px] leading-none font-extrabold text-blue" id="statToday">0</span>
+          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">seen today</span>
         </div>
-        <div class="stat-card">
-          <span class="stat-num" id="statPct">0%</span>
-          <span class="stat-label">of all signs</span>
+        <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
+          <span class="block font-display text-[26px] leading-none font-extrabold text-green" id="statPct">0%</span>
+          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">of all signs</span>
         </div>
       </div>
 
-      <div class="toggles">
+      <div class="mt-[18px] mb-1">
         <label class="toggle-row"><input type="checkbox" id="toggleHideSeen" /><span>Hide seen signs on the map</span></label>
         <label class="toggle-row"><input type="checkbox" id="toggleBiz" /><span>Show business codes</span></label>
         <label class="toggle-row"><input type="checkbox" id="toggleBadges" /><span>Show badge spots</span></label>
@@ -164,23 +164,23 @@
 
       <h3 class="panel-subhead">Recently spotted</h3>
       <ul class="seen-list" id="seenList"></ul>
-      <p class="empty-note" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
+      <p class="rounded-[14px] bg-white p-3.5 text-sm text-[#8c88a0]" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
 
       <h3 class="panel-subhead">Your codes</h3>
-      <p class="panel-note" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text.</p>
-      <div class="backup-row">
+      <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text.</p>
+      <div class="flex gap-2.5">
         <button class="pill-btn" id="copyCodesBtn">Copy code list</button>
       </div>
 
       <h3 class="panel-subhead">Backup</h3>
-      <p class="panel-note">Your progress lives only in this browser. Copy a backup now and then!</p>
-      <div class="backup-row">
+      <p class="mb-2.5 text-[13px] text-[#8c88a0]">Your progress lives only in this browser. Copy a backup now and then!</p>
+      <div class="flex gap-2.5">
         <button class="pill-btn" id="exportBtn">Copy backup</button>
         <button class="pill-btn" id="importBtn">Paste backup</button>
       </div>
 
-      <p class="data-stamp" id="dataStamp"></p>
-      <p class="credits">Sign data from the <a href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
+      <p class="mt-[22px] mb-0.5 text-xs text-[#a09dba]" id="dataStamp"></p>
+      <p class="mt-0.5 text-xs text-[#a09dba]">Sign data from the <a class="font-bold text-peri" href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
       <button class="about-link" id="aboutBtn">How does this app work?</button>
     </div>
   </section>
