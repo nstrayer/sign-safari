@@ -5,7 +5,7 @@ import { createStore } from "./store";
 import { createSignMap } from "./map";
 import { createSearch } from "./search";
 import { createUi, createWelcome } from "./ui";
-import { createRoutePlanner } from "./route.js";
+import { createRoutePlanner } from "./route";
 
 async function fetchJson(url) {
   const res = await fetch(url);

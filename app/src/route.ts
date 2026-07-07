@@ -14,6 +14,10 @@
 // nearest-unvisited walk from the seed until the budget runs out, then
 // 2-opt to untangle the visiting order.
 
+import { el } from "./dom";
+import type { LonLat, NetworkData, NetworkSign, PhotonResponse } from "./types";
+import type { Store } from "./store";
+
 const COLORS = {
   street: "#c9cdd4",
   unseen: "#e8704a",
@@ -30,7 +34,20 @@ const AREA = { lat: 42.2808, lon: -83.743, bbox: "-84.25,42.0,-83.35,42.55" };
 
 // ---------- Graph ----------
 
-function buildGraph(raw) {
+interface Graph {
+  nodeCount: number;
+  edgeCount: number;
+  kx: number;
+  xs: Float64Array;
+  ys: Float64Array;
+  off: Int32Array;
+  adj: Int32Array;
+  wt: Float32Array;
+  edges: number[];
+  signs: NetworkSign[];
+}
+
+function buildGraph(raw: NetworkData): Graph {
   const nodeCount = raw.nodes.length / 2;
   const edgeCount = raw.edges.length / 3;
 
@@ -72,7 +89,14 @@ function buildGraph(raw) {
 
 // ---------- Dijkstra ----------
 
-function makeHeap(cap) {
+interface MinHeap {
+  readonly size: number;
+  push(key: number, node: number): void;
+  pop(): number;
+  peekKey(): number;
+}
+
+function makeHeap(cap: number): MinHeap {
   let keys = new Float32Array(cap);
   let nodes = new Int32Array(cap);
   let size = 0;
@@ -109,7 +133,12 @@ function makeHeap(cap) {
   };
 }
 
-function dijkstra(graph, src) {
+interface DijkstraResult {
+  dist: Float32Array;
+  prev: Int32Array;
+}
+
+function dijkstra(graph: Graph, src: number): DijkstraResult {
   const { nodeCount, off, adj, wt } = graph;
   const dist = new Float32Array(nodeCount).fill(Infinity);
   const prev = new Int32Array(nodeCount).fill(-1);
@@ -133,21 +162,23 @@ function dijkstra(graph, src) {
   return { dist, prev };
 }
 
+type Shortest = (src: number) => DijkstraResult;
+
 // LRU cache of full Dijkstra results keyed by source node. The cap needs
 // headroom for the largest routes: an 80-stop build touches ~80 sources
 // during 2-opt and leg assembly, and thrashing means recomputing them.
-function makeDijkstraCache(graph, cap = 128) {
-  const cache = new Map();
+function makeDijkstraCache(graph: Graph, cap = 128): Shortest {
+  const cache = new Map<number, DijkstraResult>();
   return (src) => {
     if (cache.has(src)) {
-      const hit = cache.get(src);
+      const hit = cache.get(src)!; // has() checked above
       cache.delete(src);
       cache.set(src, hit);
       return hit;
     }
     const result = dijkstra(graph, src);
     cache.set(src, result);
-    if (cache.size > cap) cache.delete(cache.keys().next().value);
+    if (cache.size > cap) cache.delete(cache.keys().next().value!); // size > cap, so a key exists
     return result;
   };
 }
@@ -163,9 +194,11 @@ function makeDijkstraCache(graph, cap = 128) {
 // greedy draft first, then a 2-opt generator that yields after every
 // accepted improvement.
 
+type RowFor = (node: number) => Float32Array;
+
 // Per-build cache of "distance from node X to every sign" rows.
-function makeRows(graph, shortest) {
-  const rows = new Map();
+function makeRows(graph: Graph, shortest: Shortest): RowFor {
+  const rows = new Map<number, Float32Array>();
   return (node) => {
     if (!rows.has(node)) {
       const { dist } = shortest(node);
@@ -173,8 +206,15 @@ function makeRows(graph, shortest) {
       for (let j = 0; j < graph.signs.length; j++) row[j] = dist[graph.signs[j].n];
       rows.set(node, row);
     }
-    return rows.get(node);
+    return rows.get(node)!; // set just above when missing
   };
+}
+
+interface BuildOpts {
+  maxMeters: number;
+  maxCount: number;
+  excluded: Set<number>;
+  loop: boolean;
 }
 
 // Greedy: extend an existing stop order (possibly empty) by repeatedly
@@ -182,11 +222,11 @@ function makeRows(graph, shortest) {
 // loops, the return leg home; the undirected graph makes the seed's own
 // row double as "distance home"). Mutates stopSigns; also used to refill
 // budget freed up by 2-opt.
-function greedyExtend(graph, rowFor, seedNode, stopSigns, spentMeters, { maxMeters, maxCount, excluded, loop }) {
+function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], spentMeters: number, { maxMeters, maxCount, excluded, loop }: BuildOpts): number {
   const { signs } = graph;
   const homeRow = rowFor(seedNode);
   const used = new Set(stopSigns);
-  const todo = new Set();
+  const todo = new Set<number>();
   for (let i = 0; i < signs.length; i++) {
     if (!excluded.has(i) && !used.has(i)) todo.add(i);
   }
@@ -214,7 +254,7 @@ function greedyExtend(graph, rowFor, seedNode, stopSigns, spentMeters, { maxMete
 }
 
 // Path length of a stop order, with and without the loop leg home.
-function routeTotals(graph, rowFor, seedNode, stopSigns, loop) {
+function routeTotals(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], loop: boolean): { pathMeters: number; totalMeters: number } {
   const homeRow = rowFor(seedNode);
   let pathMeters = 0;
   let prevNode = seedNode;
@@ -226,12 +266,18 @@ function routeTotals(graph, rowFor, seedNode, stopSigns, loop) {
   return { pathMeters, totalMeters: pathMeters + home };
 }
 
+interface Candidate {
+  stopSigns: number[];
+  pathMeters: number;
+  totalMeters: number;
+}
+
 // Multi-start: greedy is myopic about its opening move, so run it once for
 // each of the k nearest viable first signs and let the results race.
 // Duplicates (openers that converge to the same route) are dropped.
-function buildCandidates(graph, rowFor, seedNode, opts, k = 4) {
+function buildCandidates(graph: Graph, rowFor: RowFor, seedNode: number, opts: BuildOpts, k = 4): Candidate[] {
   const homeRow = rowFor(seedNode);
-  const openers = [];
+  const openers: [number, number][] = [];
   for (let i = 0; i < graph.signs.length; i++) {
     if (opts.excluded.has(i)) continue;
     const d = homeRow[i];
@@ -240,8 +286,8 @@ function buildCandidates(graph, rowFor, seedNode, opts, k = 4) {
   }
   openers.sort((a, b) => a[0] - b[0]);
 
-  const dedupe = new Set();
-  const candidates = [];
+  const dedupe = new Set<string>();
+  const candidates: Candidate[] = [];
   for (const [d, first] of openers.slice(0, k)) {
     const stopSigns = [first];
     greedyExtend(graph, rowFor, seedNode, stopSigns, d, opts);
@@ -256,11 +302,11 @@ function buildCandidates(graph, rowFor, seedNode, opts, k = 4) {
 // 2-opt with the seed as a fixed anchor: reverse segments while the path
 // (plus the leg home, when looping) gets shorter. Mutates stopSigns and
 // yields after each accepted reversal so the caller can animate it.
-function* twoOptSteps(graph, rowFor, seedNode, stopSigns, loop) {
+function* twoOptSteps(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], loop: boolean): Generator<{ pass: number; saved: number }> {
   const { signs } = graph;
   const homeRow = rowFor(seedNode);
-  const nodeOf = (p) => (p < 0 ? seedNode : signs[stopSigns[p]].n);
-  const D = (p, signPos) => rowFor(nodeOf(p))[stopSigns[signPos]];
+  const nodeOf = (p: number) => (p < 0 ? seedNode : signs[stopSigns[p]].n);
+  const D = (p: number, signPos: number) => rowFor(nodeOf(p))[stopSigns[signPos]];
   let saved = 0;
   for (let pass = 1; pass <= 10; pass++) {
     let improved = false;
@@ -284,14 +330,14 @@ function* twoOptSteps(graph, rowFor, seedNode, stopSigns, loop) {
 
 // Street-node path for the current stop order: one leg per stop, walking
 // prev[] back from each leg's end, plus the leg home when looping.
-function legsForOrder(graph, shortest, seedNode, stopSigns, loop) {
+function legsForOrder(graph: Graph, shortest: Shortest, seedNode: number, stopSigns: number[], loop: boolean): number[][] {
   const targets = stopSigns.map((si) => graph.signs[si].n);
   if (loop && stopSigns.length) targets.push(seedNode);
-  const legs = [];
+  const legs: number[][] = [];
   let from = seedNode;
   for (const to of targets) {
     const { prev } = shortest(from);
-    const leg = [];
+    const leg: number[] = [];
     for (let v = to; v !== -1; v = prev[v]) leg.push(v);
     leg.reverse();
     legs.push(leg);
@@ -302,11 +348,24 @@ function legsForOrder(graph, shortest, seedNode, stopSigns, loop) {
 
 // ---------- View ----------
 
-export function createRoutePlanner({ store, showToast }) {
-  const el = (id) => document.getElementById(id);
+type Seed = { node: number; label: string; isSign: boolean };
+type ActiveRoute = { stopSigns: number[]; totalMeters: number; pathNodes: number[]; shown?: number };
+
+// Address-search result rows: either a sign match or a geocoded place.
+type AddrItem =
+  | { label: string; sub?: string; sign: NetworkSign; coords?: undefined }
+  | { label: string; sub?: string; sign?: undefined; coords: LonLat };
+
+export interface RoutePlanner {
+  load(): Promise<void>;
+  show(): void;
+  hide(): void;
+}
+
+export function createRoutePlanner({ store, showToast }: { store: Store; showToast: (msg: string) => void }): RoutePlanner {
   const els = {
     view: el("routeView"),
-    canvas: el("routeCanvas"),
+    canvas: el<HTMLCanvasElement>("routeCanvas"),
     hint: el("routeHint"),
     drawer: el("routeDrawer"),
     drawerBar: el("drawerBar"),
@@ -316,48 +375,50 @@ export function createRoutePlanner({ store, showToast }) {
     stepStart: el("stepStart"),
     stepPlan: el("stepPlan"),
     introGo: el("introGo"),
-    useLocation: el("useLocation"),
-    addrInput: el("addrInput"),
+    useLocation: el<HTMLButtonElement>("useLocation"),
+    addrInput: el<HTMLInputElement>("addrInput"),
     addrResults: el("addrResults"),
     seedLabel: el("seedLabel"),
     changeStart: el("changeStart"),
     modeDistance: el("modeDistance"),
     modeCount: el("modeCount"),
-    slider: el("budgetSlider"),
+    slider: el<HTMLInputElement>("budgetSlider"),
     budgetLabel: el("budgetLabel"),
-    skipSeen: el("skipSeen"),
-    loopBack: el("loopBack"),
+    skipSeen: el<HTMLInputElement>("skipSeen"),
+    loopBack: el<HTMLInputElement>("loopBack"),
     summary: el("routeSummary"),
     actions: el("routeActions"),
     exportGpx: el("exportGpx"),
     stops: el("routeStops"),
   };
-  const ctx = els.canvas.getContext("2d");
+  const ctx2d = els.canvas.getContext("2d");
+  if (!ctx2d) throw new Error("no 2d context");
+  const ctx = ctx2d; // non-null binding so closures below see it narrowed
 
-  let graph = null;
-  let shortest = null;
-  let streetsPath = null; // Path2D in world coords
-  let loadPromise = null;
+  let graph: Graph | null = null;
+  let shortest: Shortest | null = null;
+  let streetsPath: Path2D | null = null; // Path2D in world coords
+  let loadPromise: Promise<void> | null = null;
 
   // View state: world center + pixels per world unit.
   const view = { cx: 0, cy: 0, scale: 1, fitScale: 1 };
-  let seed = null; // { node, label, isSign }
-  let route = null;
-  let routePath = null; // Path2D in world coords
-  let race = null; // [{ path, color, alpha }] while candidate routes race
-  let mode = "distance"; // or "count"
+  let seed: Seed | null = null; // { node, label, isSign }
+  let route: ActiveRoute | null = null;
+  let routePath: Path2D | null = null; // Path2D in world coords
+  let race: { path: Path2D; color: string; alpha: number }[] | null = null; // [{ path, color, alpha }] while candidate routes race
+  let mode: "distance" | "count" = "distance"; // or "count"
   let needsDraw = false;
 
   // ---------- Drawer (mobile bottom sheet; inert as a docked card on wide) ----------
 
-  function setDrawer(open) {
+  function setDrawer(open: boolean) {
     els.drawer.classList.toggle("open", open);
     els.drawerBar.setAttribute("aria-expanded", String(open));
   }
   const drawerOpen = () => els.drawer.classList.contains("open");
 
   els.drawerBar.addEventListener("click", (e) => {
-    if (e.target.closest(".drawer-map-btn")) return;
+    if (e.target instanceof Element && e.target.closest(".drawer-map-btn")) return;
     setDrawer(!drawerOpen());
   });
   els.drawerBar.addEventListener("keydown", (e) => {
@@ -367,7 +428,7 @@ export function createRoutePlanner({ store, showToast }) {
   });
 
   // Swipe up/down on the bar (same simple pattern as the detail sheet).
-  let barTouchY = null;
+  let barTouchY: number | null = null;
   els.drawerBar.addEventListener("touchstart", (e) => { barTouchY = e.touches[0].clientY; }, { passive: true });
   els.drawerBar.addEventListener("touchend", (e) => {
     if (barTouchY === null) return;
@@ -379,15 +440,15 @@ export function createRoutePlanner({ store, showToast }) {
 
   // ---------- Wizard steps ----------
 
-  const STEP_TITLES = { intro: "Plan a sign run", start: "Where are you starting?" };
+  const STEP_TITLES: Record<"intro" | "start", string> = { intro: "Plan a sign run", start: "Where are you starting?" };
 
-  function setStep(step) {
+  function setStep(step: "intro" | "start" | "plan") {
     els.stepIntro.hidden = step !== "intro";
     els.stepStart.hidden = step !== "start";
     els.stepPlan.hidden = step !== "plan";
     els.hint.hidden = step === "intro";
     if (step === "start") els.hint.textContent = "You can also just tap a sign dot";
-    if (step === "plan") els.hint.textContent = `Starting at ${seed.label}`;
+    if (step === "plan" && seed) els.hint.textContent = `Starting at ${seed.label}`;
     // Intro/start need their controls; the plan step manages the drawer
     // itself (rebuild collapses it so the build animation gets the map).
     if (step !== "plan") {
@@ -402,7 +463,7 @@ export function createRoutePlanner({ store, showToast }) {
     return "plan";
   }
 
-  function setSeed(next) {
+  function setSeed(next: Seed) {
     seed = next;
     els.seedLabel.textContent = seed.label;
     try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
@@ -426,12 +487,12 @@ export function createRoutePlanner({ store, showToast }) {
 
   // ---------- Loading ----------
 
-  function load() {
+  function load(): Promise<void> {
     if (!loadPromise) {
       loadPromise = fetch("./data/network.json")
         .then((res) => {
           if (!res.ok) throw new Error(`network.json: ${res.status}`);
-          return res.json();
+          return res.json() as Promise<NetworkData>;
         })
         .then((raw) => {
           graph = buildGraph(raw);
@@ -455,6 +516,7 @@ export function createRoutePlanner({ store, showToast }) {
   }
 
   function fitToSigns() {
+    if (!graph) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const s of graph.signs) {
       const x = graph.xs[s.n], y = graph.ys[s.n];
@@ -470,7 +532,8 @@ export function createRoutePlanner({ store, showToast }) {
   }
 
   // Zoom to a set of path nodes, framed in the canvas area the card leaves free.
-  function fitToNodes(nodes) {
+  function fitToNodes(nodes: number[]) {
+    if (!graph) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const n of nodes) {
       const x = graph.xs[n], y = graph.ys[n];
@@ -506,7 +569,7 @@ export function createRoutePlanner({ store, showToast }) {
     scheduleDraw();
   }
 
-  function toScreen(x, y) {
+  function toScreen(x: number, y: number): [number, number] {
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
     return [(x - view.cx) * view.scale + w / 2, (view.cy - y) * view.scale + h / 2];
   }
@@ -520,7 +583,7 @@ export function createRoutePlanner({ store, showToast }) {
     });
   }
 
-  function drawBadge(sx, sy, text, fill, textFill) {
+  function drawBadge(sx: number, sy: number, text: string, fill: string, textFill: string) {
     ctx.beginPath();
     ctx.arc(sx, sy, 10, 0, Math.PI * 2);
     ctx.fillStyle = fill;
@@ -536,7 +599,7 @@ export function createRoutePlanner({ store, showToast }) {
   }
 
   function draw() {
-    if (!graph || els.view.hidden) return;
+    if (!graph || !streetsPath || els.view.hidden) return;
     const dpr = devicePixelRatio || 1;
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -582,7 +645,7 @@ export function createRoutePlanner({ store, showToast }) {
       ctx.translate(w / 2, h / 2);
       ctx.scale(view.scale, -view.scale);
       ctx.translate(-view.cx, -view.cy);
-      const dashes = [[], [10, 7], [5, 5], [2.5, 6]];
+      const dashes: number[][] = [[], [10, 7], [5, 5], [2.5, 6]];
       race.forEach((c, i) => {
         if (c.alpha < 0.02) return;
         ctx.globalAlpha = c.alpha;
@@ -613,7 +676,7 @@ export function createRoutePlanner({ store, showToast }) {
       for (let i = 0; i < count; i++) {
         const s = graph.signs[route.stopSigns[i]];
         const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
-        const isStart = i === 0 && s.n === seed.node;
+        const isStart = i === 0 && s.n === seed?.node;
         drawBadge(sx, sy, String(i + 1), isStart ? COLORS.seed : COLORS.route, isStart ? COLORS.route : "#fff");
       }
     }
@@ -621,10 +684,10 @@ export function createRoutePlanner({ store, showToast }) {
 
   // ---------- Interaction: pan / zoom / tap ----------
 
-  const pointers = new Map();
+  const pointers = new Map<number, { x: number; y: number }>();
   let moved = false;
 
-  function zoomAt(px, py, factor) {
+  function zoomAt(px: number, py: number, factor: number) {
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
     const next = Math.min(view.fitScale * 200, Math.max(view.fitScale * 0.7, view.scale * factor));
     factor = next / view.scale;
@@ -663,7 +726,7 @@ export function createRoutePlanner({ store, showToast }) {
     p.x = e.clientX; p.y = e.clientY;
   });
 
-  function pointerEnd(e) {
+  function pointerEnd(e: PointerEvent) {
     pointers.delete(e.pointerId);
     if (!moved && graph) {
       const rect = els.canvas.getBoundingClientRect();
@@ -679,7 +742,8 @@ export function createRoutePlanner({ store, showToast }) {
     zoomAt(e.clientX - rect.left, e.clientY - rect.top, Math.pow(1.0015, -e.deltaY));
   }, { passive: false });
 
-  function tap(px, py) {
+  function tap(px: number, py: number) {
+    if (!graph) return;
     let best = -1, bestD = 22 * 22;
     for (let i = 0; i < graph.signs.length; i++) {
       const [sx, sy] = toScreen(graph.xs[graph.signs[i].n], graph.ys[graph.signs[i].n]);
@@ -695,7 +759,8 @@ export function createRoutePlanner({ store, showToast }) {
   // ---------- Start step: geolocation + address search ----------
 
   // Nearest network node to a lon/lat, and roughly how far away it is.
-  function nearestNode(lon, lat) {
+  function nearestNode(lon: number, lat: number) {
+    if (!graph) return { node: 0, meters: Infinity }; // unreachable pre-load guard
     const x = lon * graph.kx, y = lat;
     let best = 0, bestD = Infinity;
     for (let i = 0; i < graph.nodeCount; i++) {
@@ -705,7 +770,7 @@ export function createRoutePlanner({ store, showToast }) {
     return { node: best, meters: Math.sqrt(bestD) * DEG_M };
   }
 
-  function seedFromCoords(lon, lat, label) {
+  function seedFromCoords(lon: number, lat: number, label: string) {
     const { node, meters } = nearestNode(lon, lat);
     if (meters > 2000) {
       showToast("That spot is outside the mapped street network.");
@@ -740,10 +805,10 @@ export function createRoutePlanner({ store, showToast }) {
 
   // Address search: instant matches over sign addresses, Photon places after
   // a pause (same service and area bias as the map tab's search).
-  let addrDebounce = null;
-  let photonAbort = null;
+  let addrDebounce: ReturnType<typeof setTimeout> | null = null;
+  let photonAbort: AbortController | null = null;
 
-  function renderAddrResults(items) {
+  function renderAddrResults(items: AddrItem[]) {
     els.addrResults.innerHTML = "";
     for (const item of items) {
       const li = document.createElement("li");
@@ -765,9 +830,10 @@ export function createRoutePlanner({ store, showToast }) {
     els.addrResults.hidden = items.length === 0;
   }
 
-  function localAddrMatches(q) {
+  function localAddrMatches(q: string): AddrItem[] {
     const nq = q.toLowerCase();
-    const out = [];
+    const out: AddrItem[] = [];
+    if (!graph) return out;
     for (const s of graph.signs) {
       if (s.addr.toLowerCase().includes(nq)) {
         out.push({ label: s.addr, sub: "sign", sign: s });
@@ -779,7 +845,7 @@ export function createRoutePlanner({ store, showToast }) {
 
   els.addrInput.addEventListener("input", () => {
     const q = els.addrInput.value.trim();
-    clearTimeout(addrDebounce);
+    clearTimeout(addrDebounce ?? undefined);
     photonAbort?.abort();
     if (q.length < 2 || !graph) {
       els.addrResults.hidden = true;
@@ -794,7 +860,7 @@ export function createRoutePlanner({ store, showToast }) {
       try {
         const res = await fetch(url, { signal: photonAbort.signal });
         if (!res.ok) return;
-        const data = await res.json();
+        const data = (await res.json()) as PhotonResponse;
         if (els.addrInput.value.trim() !== q) return; // stale
         const places = (data.features ?? []).map((f) => {
           const p = f.properties;
@@ -807,7 +873,7 @@ export function createRoutePlanner({ store, showToast }) {
         });
         renderAddrResults([...locals, ...places]);
       } catch (e) {
-        if (e.name !== "AbortError") console.warn("Photon search failed", e);
+        if (!(e instanceof Error) || e.name !== "AbortError") console.warn("Photon search failed", e);
       }
     }, 300);
   });
@@ -817,10 +883,10 @@ export function createRoutePlanner({ store, showToast }) {
   function sliderConfig() {
     if (mode === "distance") {
       Object.assign(els.slider, { min: 0.5, max: 15, step: 0.5 });
-      if (+els.slider.value > 15) els.slider.value = 3;
+      if (+els.slider.value > 15) els.slider.value = "3";
     } else {
       Object.assign(els.slider, { min: 5, max: 100, step: 5 });
-      if (+els.slider.value < 5) els.slider.value = 20;
+      if (+els.slider.value < 5) els.slider.value = "20";
     }
   }
 
@@ -828,14 +894,14 @@ export function createRoutePlanner({ store, showToast }) {
     return mode === "distance" ? `${(+els.slider.value).toFixed(1)} km` : `${els.slider.value} signs`;
   }
 
-  function setMode(next) {
+  function setMode(next: "distance" | "count") {
     mode = next;
     els.modeDistance.classList.toggle("is-active", mode === "distance");
     els.modeCount.classList.toggle("is-active", mode === "count");
     const keep = els.slider.value;
     sliderConfig();
-    if (mode === "distance" && !(+keep >= 0.5 && +keep <= 15)) els.slider.value = 3;
-    if (mode === "count" && !(+keep >= 5 && +keep <= 100)) els.slider.value = 20;
+    if (mode === "distance" && !(+keep >= 0.5 && +keep <= 15)) els.slider.value = "3";
+    if (mode === "count" && !(+keep >= 5 && +keep <= 100)) els.slider.value = "20";
     els.budgetLabel.textContent = budgetText();
     rebuild();
   }
@@ -852,11 +918,13 @@ export function createRoutePlanner({ store, showToast }) {
 
   let buildGen = 0;
 
-  function pathFromNodes(nodes) {
+  function pathFromNodes(nodes: number[]): Path2D {
     const p = new Path2D();
+    if (!graph) return p;
+    const g = graph;
     nodes.forEach((n, i) => {
-      if (i === 0) p.moveTo(graph.xs[n], graph.ys[n]);
-      else p.lineTo(graph.xs[n], graph.ys[n]);
+      if (i === 0) p.moveTo(g.xs[n], g.ys[n]);
+      else p.lineTo(g.xs[n], g.ys[n]);
     });
     return p;
   }
@@ -864,18 +932,19 @@ export function createRoutePlanner({ store, showToast }) {
   // Status narration shows in the plan step's summary line (wide screens)
   // and doubles as the drawer bar title (phones, where the drawer is
   // usually collapsed while the build animates).
-  function setStatus(text) {
+  function setStatus(text: string) {
     els.summary.hidden = false;
     els.summary.textContent = text;
     els.drawerTitle.textContent = text;
   }
 
-  function setBuilding(on) {
+  function setBuilding(on: boolean) {
     els.summary.classList.toggle("building", on);
     els.drawerTitle.classList.toggle("building", on);
   }
 
-  function appendLeg(path, leg, isFirst) {
+  function appendLeg(path: Path2D, leg: number[], isFirst: boolean) {
+    if (!graph) return;
     for (let k = 0; k < leg.length; k++) {
       const n = leg[k];
       if (isFirst && k === 0) path.moveTo(graph.xs[n], graph.ys[n]);
@@ -899,12 +968,16 @@ export function createRoutePlanner({ store, showToast }) {
   // The narrated build: race a few greedy starts against each other, keep
   // the winner, watch 2-opt untangle it, then spend any budget the
   // optimizer freed up on extra signs.
-  async function runBuild(gen) {
+  async function runBuild(gen: number) {
     const alive = () => gen === buildGen && !!seed && !!graph;
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     if (!alive()) return;
+    // alive() just guaranteed these; re-check so TS narrows, and capture
+    // non-null bindings for the closures below.
+    if (!seed || !graph || !shortest) return;
+    const g = graph, short = shortest, seedNode = seed.node;
 
-    const excluded = new Set();
+    const excluded = new Set<number>();
     if (els.skipSeen.checked) {
       for (let i = 0; i < graph.signs.length; i++) {
         if (store.isSeen(graph.signs[i].id)) excluded.add(i);
@@ -938,7 +1011,7 @@ export function createRoutePlanner({ store, showToast }) {
         winnerIdx = i;
       }
     }
-    const candLegs = candidates.map((c) => legsForOrder(graph, shortest, seed.node, c.stopSigns, loop));
+    const candLegs = candidates.map((c) => legsForOrder(g, short, seedNode, c.stopSigns, loop));
 
     route = null;
     routePath = null;
@@ -953,7 +1026,7 @@ export function createRoutePlanner({ store, showToast }) {
       const delay = Math.min(150, Math.max(40, 1800 / maxLegs));
       for (let i = 0; i < maxLegs; i++) {
         candLegs.forEach((legs, ci) => {
-          if (i < legs.length) appendLeg(race[ci].path, legs[i], i === 0);
+          if (race && i < legs.length) appendLeg(race[ci].path, legs[i], i === 0);
         });
         setStatus(`Trying ${candidates.length} different starts...`);
         scheduleDraw();
@@ -1007,11 +1080,12 @@ export function createRoutePlanner({ store, showToast }) {
     // Phase 3+4, repeated: untangle with 2-opt, then spend whatever budget
     // the optimizer freed up on more signs, until neither helps.
     const stopSigns = route.stopSigns;
+    const rt = route;
     const refreshRoute = () => {
-      const totals = routeTotals(graph, rowFor, seed.node, stopSigns, loop);
-      route.totalMeters = totals.totalMeters;
-      route.pathNodes = legsForOrder(graph, shortest, seed.node, stopSigns, loop).flat();
-      routePath = pathFromNodes(route.pathNodes);
+      const totals = routeTotals(g, rowFor, seedNode, stopSigns, loop);
+      rt.totalMeters = totals.totalMeters;
+      rt.pathNodes = legsForOrder(g, short, seedNode, stopSigns, loop).flat();
+      routePath = pathFromNodes(rt.pathNodes);
       return totals;
     };
 
@@ -1055,6 +1129,8 @@ export function createRoutePlanner({ store, showToast }) {
   }
 
   function renderResult() {
+    if (!route || !graph || !seed) return;
+    const g = graph;
     const km = route.totalMeters / 1000;
     setStatus(`${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`);
     els.actions.hidden = false;
@@ -1071,8 +1147,8 @@ export function createRoutePlanner({ store, showToast }) {
       li.textContent = s.addr;
       if (store.isSeen(s.id)) li.classList.add("stop-seen");
       li.addEventListener("click", () => {
-        view.cx = graph.xs[s.n];
-        view.cy = graph.ys[s.n];
+        view.cx = g.xs[s.n];
+        view.cy = g.ys[s.n];
         view.scale = Math.max(view.scale, view.fitScale * 12);
         scheduleDraw();
       });
@@ -1089,19 +1165,20 @@ export function createRoutePlanner({ store, showToast }) {
 
   // ---------- GPX export ----------
 
-  function xmlEscape(s) {
+  function xmlEscape(s: string) {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   els.exportGpx.addEventListener("click", () => {
     if (!route || !graph) return;
-    const lonOf = (n) => (graph.xs[n] / graph.kx).toFixed(6);
-    const latOf = (n) => graph.ys[n].toFixed(6);
+    const g = graph;
+    const lonOf = (n: number) => (g.xs[n] / g.kx).toFixed(6);
+    const latOf = (n: number) => g.ys[n].toFixed(6);
     const km = (route.totalMeters / 1000).toFixed(1);
     const name = `Sign Safari - ${route.stopSigns.length} signs, ${km} km`;
 
     const wpts = route.stopSigns.map((si, i) => {
-      const s = graph.signs[si];
+      const s = g.signs[si];
       return `  <wpt lat="${latOf(s.n)}" lon="${lonOf(s.n)}"><name>${i + 1}. ${xmlEscape(s.addr)}</name></wpt>`;
     });
     const trkpts = route.pathNodes.map(
