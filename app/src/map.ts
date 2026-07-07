@@ -1,6 +1,14 @@
 // Map setup: basemap, heatmap/circle cross-fade, biz + badge layers, tap handling.
 
 import maplibregl from "maplibre-gl";
+import type {
+  ExpressionSpecification,
+  FilterSpecification,
+  Map as MapLibreMap,
+  MapGeoJSONFeature,
+  PointLike,
+} from "maplibre-gl";
+import type { Kind, LonLat, SignCollection, SignProps, TappedFeature } from "./types";
 
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
 // Swap in if OpenFreeMap is ever down:
@@ -17,7 +25,34 @@ const COLORS = {
 const FADE_START = 13.5;
 const FADE_END = 15;
 
-export function createSignMap({ container, onFeatureTap, onMapTap }) {
+interface SignMapOptions {
+  container: string;
+  onFeatureTap: (feature: TappedFeature) => void;
+  onMapTap: () => void;
+}
+
+export interface SignMap {
+  map: MapLibreMap;
+  onLoad(fn: () => void): void;
+  addLayers(data: { signs: SignCollection; biz: SignCollection; badges: SignCollection }): void;
+  setSeen(id: string, isSeen: boolean): void;
+  applySeen(ids: string[]): void;
+  setHideSeen(hide: boolean, seenIds: string[]): void;
+  setLayerVisible(layerId: string, visible: boolean): void;
+  flyTo(coords: LonLat, zoom?: number): void;
+}
+
+// The one loosely-typed edge of MapLibre: rendered features come back with
+// untyped properties and a broad geometry union, but every tappable layer is
+// one of our own point sources, so the narrowing here is a formality.
+function toTapped(f: MapGeoJSONFeature): TappedFeature {
+  const props = f.properties as SignProps;
+  const kind: Kind = f.layer.id === "biz-pts" ? "biz" : f.layer.id === "badge-pts" ? "badge" : "sign";
+  if (f.geometry.type !== "Point") throw new Error(`Non-point feature in ${f.layer.id}`);
+  return { id: props.id, kind, props, coords: f.geometry.coordinates as LonLat };
+}
+
+export function createSignMap({ container, onFeatureTap, onMapTap }: SignMapOptions): SignMap {
   const map = new maplibregl.Map({
     container,
     style: OPENFREEMAP_STYLE,
@@ -32,7 +67,6 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
     new maplibregl.GeolocateControl({
       positionOptions: { enableHighAccuracy: true },
       trackUserLocation: true,
-      showUserHeading: true,
     }),
     "top-right"
   );
@@ -46,9 +80,9 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
     }
   });
 
-  const seenExpr = ["boolean", ["feature-state", "seen"], false];
+  const seenExpr: ExpressionSpecification = ["boolean", ["feature-state", "seen"], false];
 
-  function addLayers({ signs, biz, badges }) {
+  function addLayers({ signs, biz, badges }: { signs: SignCollection; biz: SignCollection; badges: SignCollection }): void {
     map.addSource("signs", { type: "geojson", data: signs, promoteId: "id" });
     map.addSource("biz", { type: "geojson", data: biz, promoteId: "id" });
     map.addSource("badges", { type: "geojson", data: badges, promoteId: "id" });
@@ -125,19 +159,13 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
 
     map.on("click", (e) => {
       const pad = 8;
-      const box = [
+      const box: [PointLike, PointLike] = [
         [e.point.x - pad, e.point.y - pad],
         [e.point.x + pad, e.point.y + pad],
       ];
       const hits = map.queryRenderedFeatures(box, { layers: tappable });
       if (hits.length) {
-        const f = hits[0];
-        onFeatureTap({
-          id: f.properties.id,
-          kind: f.layer.id === "biz-pts" ? "biz" : f.layer.id === "badge-pts" ? "badge" : "sign",
-          props: f.properties,
-          coords: f.geometry.coordinates,
-        });
+        onFeatureTap(toTapped(hits[0]));
       } else {
         onMapTap();
       }
@@ -149,7 +177,7 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
     }
   }
 
-  function sourceFor(id) {
+  function sourceFor(id: string): string {
     return id.startsWith("biz-") ? "biz" : "signs";
   }
 
@@ -167,7 +195,8 @@ export function createSignMap({ container, onFeatureTap, onMapTap }) {
     setHideSeen(hide, seenIds) {
       const homeIds = seenIds.filter((id) => !id.startsWith("biz-"));
       const bizIds = seenIds.filter((id) => id.startsWith("biz-"));
-      const filterFor = (ids) => (hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined);
+      const filterFor = (ids: string[]): FilterSpecification | undefined =>
+        hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined;
       map.setFilter("signs-pts", filterFor(homeIds));
       map.setFilter("signs-heat", filterFor(homeIds));
       map.setFilter("biz-pts", filterFor(bizIds));

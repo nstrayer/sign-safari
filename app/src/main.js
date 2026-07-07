@@ -2,7 +2,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./styles.css";
 
 import { createStore } from "./store";
-import { createSignMap } from "./map.js";
+import { createSignMap } from "./map";
 import { createSearch } from "./search.js";
 import { createUi, createWelcome } from "./ui.js";
 import { createRoutePlanner } from "./route.js";
