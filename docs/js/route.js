@@ -308,6 +308,9 @@ export function createRoutePlanner({ store, showToast }) {
     view: el("routeView"),
     canvas: el("routeCanvas"),
     hint: el("routeHint"),
+    drawer: el("routeDrawer"),
+    drawerBar: el("drawerBar"),
+    drawerTitle: el("drawerTitle"),
     loading: el("routeLoading"),
     stepIntro: el("stepIntro"),
     stepStart: el("stepStart"),
@@ -345,7 +348,38 @@ export function createRoutePlanner({ store, showToast }) {
   let mode = "distance"; // or "count"
   let needsDraw = false;
 
+  // ---------- Drawer (mobile bottom sheet; inert as a docked card on wide) ----------
+
+  function setDrawer(open) {
+    els.drawer.classList.toggle("open", open);
+    els.drawerBar.setAttribute("aria-expanded", String(open));
+  }
+  const drawerOpen = () => els.drawer.classList.contains("open");
+
+  els.drawerBar.addEventListener("click", (e) => {
+    if (e.target.closest(".drawer-map-btn")) return;
+    setDrawer(!drawerOpen());
+  });
+  els.drawerBar.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    setDrawer(!drawerOpen());
+  });
+
+  // Swipe up/down on the bar (same simple pattern as the detail sheet).
+  let barTouchY = null;
+  els.drawerBar.addEventListener("touchstart", (e) => { barTouchY = e.touches[0].clientY; }, { passive: true });
+  els.drawerBar.addEventListener("touchend", (e) => {
+    if (barTouchY === null) return;
+    const dy = e.changedTouches[0].clientY - barTouchY;
+    barTouchY = null;
+    if (dy > 30) setDrawer(false);
+    else if (dy < -30) setDrawer(true);
+  }, { passive: true });
+
   // ---------- Wizard steps ----------
+
+  const STEP_TITLES = { intro: "Plan a sign run", start: "Where are you starting?" };
 
   function setStep(step) {
     els.stepIntro.hidden = step !== "intro";
@@ -354,6 +388,12 @@ export function createRoutePlanner({ store, showToast }) {
     els.hint.hidden = step === "intro";
     if (step === "start") els.hint.textContent = "You can also just tap a sign dot";
     if (step === "plan") els.hint.textContent = `Starting at ${seed.label}`;
+    // Intro/start need their controls; the plan step manages the drawer
+    // itself (rebuild collapses it so the build animation gets the map).
+    if (step !== "plan") {
+      els.drawerTitle.textContent = STEP_TITLES[step];
+      setDrawer(true);
+    }
   }
 
   function currentStep() {
@@ -438,12 +478,16 @@ export function createRoutePlanner({ store, showToast }) {
       if (y < yMin) yMin = y; if (y > yMax) yMax = y;
     }
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
-    // On phones the card overlays the bottom; on wide screens it sits on
-    // the right. Frame the route in the space that's left.
+    // On phones the drawer collapses to its bar along the bottom; on wide
+    // screens the card sits on the right. Frame the route in what's left.
     const wide = matchMedia("(min-width: 720px)").matches;
     const headerPx = 100;
     const availW = wide ? w - 420 : w;
-    const availH = wide ? h - headerPx - 24 : Math.max(h * 0.42 - headerPx, 120);
+    // Collapsed drawer height = bar + the drawer's safe-area padding;
+    // measured this way it stays right even mid collapse animation.
+    const safePad = parseFloat(getComputedStyle(els.drawer).paddingBottom) || 0;
+    const drawerPx = els.drawerBar.offsetHeight + safePad;
+    const availH = wide ? h - headerPx - 24 : Math.max(h - headerPx - drawerPx - 16, 120);
     const spanX = Math.max(xMax - xMin, 1e-5), spanY = Math.max(yMax - yMin, 1e-5);
     view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * 200);
     view.cx = (xMin + xMax) / 2 + (w / 2 - availW / 2) / view.scale;
@@ -817,9 +861,18 @@ export function createRoutePlanner({ store, showToast }) {
     return p;
   }
 
+  // Status narration shows in the plan step's summary line (wide screens)
+  // and doubles as the drawer bar title (phones, where the drawer is
+  // usually collapsed while the build animates).
   function setStatus(text) {
     els.summary.hidden = false;
     els.summary.textContent = text;
+    els.drawerTitle.textContent = text;
+  }
+
+  function setBuilding(on) {
+    els.summary.classList.toggle("building", on);
+    els.drawerTitle.classList.toggle("building", on);
   }
 
   function appendLeg(path, leg, isFirst) {
@@ -834,10 +887,11 @@ export function createRoutePlanner({ store, showToast }) {
     if (!seed || !graph) return;
     const gen = ++buildGen;
     race = null;
-    els.summary.classList.add("building");
+    setBuilding(true);
     setStatus("Measuring the streets nearby...");
     els.stops.hidden = true;
     els.actions.hidden = true;
+    setDrawer(false); // give the build animation the whole map (phones)
     // Let the status paint before the synchronous Dijkstra work starts.
     setTimeout(() => runBuild(gen).catch(console.error), 30);
   }
@@ -867,7 +921,7 @@ export function createRoutePlanner({ store, showToast }) {
     const candidates = buildCandidates(graph, rowFor, seed.node, opts);
     if (!alive()) return;
     if (!candidates.length) {
-      els.summary.classList.remove("building");
+      setBuilding(false);
       setStatus("No reachable signs fit that budget - loosen it or pick another start.");
       route = null;
       routePath = null;
@@ -994,7 +1048,7 @@ export function createRoutePlanner({ store, showToast }) {
     }
 
     refreshRoute();
-    els.summary.classList.remove("building");
+    setBuilding(false);
     renderResult();
     fitToNodes(route.pathNodes);
     scheduleDraw();
@@ -1002,8 +1056,7 @@ export function createRoutePlanner({ store, showToast }) {
 
   function renderResult() {
     const km = route.totalMeters / 1000;
-    els.summary.textContent =
-      `${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`;
+    setStatus(`${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`);
     els.actions.hidden = false;
     els.stops.innerHTML = "";
     if (!seed.isSign) {

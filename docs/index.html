@@ -15,7 +15,7 @@
 
   <link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet" />
   <!-- ?v= busts stale caches so the HTML and CSS/JS never mix across deploys. -->
-  <link href="css/styles.css?v=3" rel="stylesheet" />
+  <link href="css/styles.css?v=4" rel="stylesheet" />
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -51,7 +51,16 @@
   <section class="route-view" id="routeView" hidden aria-label="Route planner">
     <canvas id="routeCanvas"></canvas>
     <div class="route-hint" id="routeHint">Tap a sign to start a route</div>
-    <div class="route-card">
+    <div class="route-drawer" id="routeDrawer">
+      <div class="drawer-bar" id="drawerBar" role="button" tabindex="0" aria-expanded="true" aria-controls="drawerBody">
+        <div class="sheet-handle" aria-hidden="true"></div>
+        <div class="drawer-bar-row">
+          <span class="drawer-title" id="drawerTitle">Plan a sign run</span>
+          <button class="view-btn drawer-map-btn" data-view="map">Map</button>
+          <svg class="drawer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5l6-6 6 6" /></svg>
+        </div>
+      </div>
+      <div class="drawer-body" id="drawerBody">
       <div class="route-step" id="stepIntro" hidden>
         <h3 class="step-title">Plan a sign run</h3>
         <p class="step-copy">Pick a starting point and a budget - how far you feel like walking, or how many signs you're after - and this builds the shortest route through them along real streets. Seen signs are skipped so every stop is a new code word.</p>
@@ -92,6 +101,7 @@
           <button class="pill-btn" id="exportGpx">Export GPX for your watch</button>
         </div>
         <ol class="route-stops" id="routeStops" hidden></ol>
+      </div>
       </div>
     </div>
     <div class="route-loading" id="routeLoading">Loading street network...</div>
@@ -194,6 +204,6 @@
   </div>
 
   <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
-  <script type="module" src="js/app.js?v=3"></script>
+  <script type="module" src="js/app.js?v=4"></script>
 </body>
 </html>
