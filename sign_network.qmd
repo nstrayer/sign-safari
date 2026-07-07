@@ -70,35 +70,74 @@ print(f"street graph: {len(streets.nodes)} intersections, {len(streets.edges)} e
 
 ## Combine into one network
 
-Start from the street graph (collapsed to a simple undirected graph), tag
-every existing node as an `intersection`, then add each sign as a `sign`
-node connected to its nearest intersection by an `access` edge. Later we can
-upgrade this to split the street edge at the sign's exact position, but
-nearest-intersection is within about half a block on a walk network this
-dense.
+Start from the street graph (collapsed to a simple undirected graph) and tag
+every existing node as an `intersection`. Then, instead of pinning each sign
+to its nearest intersection, split the sign's nearest street edge at the
+point on the road closest to the sign: a new `snap` node goes in mid-block,
+the original edge becomes two street edges whose lengths split the block's
+real length proportionally, and the sign connects to its snap node by a
+short `access` edge. Signs that sit mid-block are now mid-block in the
+network, so path distances along streets are exact. Signs are grouped by
+edge first so a block with several signs gets split at each of them in
+order.
 
 ```{python}
 #| label: combine
+from collections import defaultdict
+
+from shapely.geometry import LineString, Point
+
 G = nx.Graph(streets.to_undirected())
 nx.set_node_attributes(G, "intersection", "node_type")
 nx.set_edge_attributes(G, "street", "edge_type")
 
-nearest = ox.distance.nearest_nodes(streets, X=lons, Y=lats)
-for feature, street_node in zip(signs, nearest):
-    lon, lat = feature["geometry"]["coordinates"]
-    sign_id = f"sign-{feature['properties']['id']}"
-    G.add_node(
-        sign_id,
-        node_type="sign",
-        x=lon,
-        y=lat,
-        addr=feature["properties"]["addr"],
+def edge_line(u, v, k):
+    """The street edge's geometry, falling back to a straight line."""
+    data = streets.edges[u, v, k]
+    if "geometry" in data:
+        return data["geometry"]
+    return LineString([
+        (streets.nodes[u]["x"], streets.nodes[u]["y"]),
+        (streets.nodes[v]["x"], streets.nodes[v]["y"]),
+    ])
+
+edge_hits = ox.distance.nearest_edges(streets, X=lons, Y=lats)
+signs_on_edge = defaultdict(list)
+for feature, (u, v, k) in zip(signs, edge_hits):
+    signs_on_edge[tuple(sorted((u, v)))].append((u, v, k, feature))
+
+for group in signs_on_edge.values():
+    u, v, k, _ = group[0]  # one reference orientation for measuring positions
+    line = edge_line(u, v, k)
+    length_m = streets.edges[u, v, k]["length"]
+    positions = sorted(
+        ((line.project(Point(f["geometry"]["coordinates"]), normalized=True), f)
+         for _, _, _, f in group),
+        key=lambda pair: pair[0],
     )
-    G.add_edge(sign_id, street_node, edge_type="access")
+
+    G.remove_edge(u, v)
+    prev_node, prev_frac = u, 0.0
+    for frac, feature in positions:
+        lon, lat = feature["geometry"]["coordinates"]
+        snap = line.interpolate(frac, normalized=True)
+        sign_id = f"sign-{feature['properties']['id']}"
+        snap_id = f"snap-{feature['properties']['id']}"
+        G.add_node(snap_id, node_type="snap", x=snap.x, y=snap.y)
+        G.add_edge(prev_node, snap_id, edge_type="street",
+                   length=(frac - prev_frac) * length_m)
+        G.add_node(sign_id, node_type="sign", x=lon, y=lat,
+                   addr=feature["properties"]["addr"])
+        G.add_edge(sign_id, snap_id, edge_type="access",
+                   length=ox.distance.great_circle(lat, lon, snap.y, snap.x))
+        prev_node, prev_frac = snap_id, frac
+    G.add_edge(prev_node, v, edge_type="street",
+               length=(1.0 - prev_frac) * length_m)
 
 counts = nx.get_node_attributes(G, "node_type")
 print(f"combined graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
 print(f"  {sum(t == 'intersection' for t in counts.values())} intersections")
+print(f"  {sum(t == 'snap' for t in counts.values())} snap points")
 print(f"  {sum(t == 'sign' for t in counts.values())} signs")
 ```
 
@@ -111,9 +150,10 @@ side as their own ways; the walk network keeps them.
 
 ```{python}
 #| label: fig-network
-#| fig-cap: "Street network (gray) with signs (red) attached to their nearest intersection."
+#| fig-cap: "Street network (gray) with signs (red) attached to snap nodes (small orange) splitting their nearest street edge."
 pos = {n: (d["x"], d["y"]) for n, d in G.nodes(data=True)}
 intersections = [n for n, d in G.nodes(data=True) if d["node_type"] == "intersection"]
+snap_nodes = [n for n, d in G.nodes(data=True) if d["node_type"] == "snap"]
 sign_nodes = [n for n, d in G.nodes(data=True) if d["node_type"] == "sign"]
 street_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "street"]
 access_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "access"]
@@ -122,13 +162,14 @@ fig, ax = plt.subplots(figsize=(10, 10))
 nx.draw_networkx_edges(G, pos, edgelist=street_edges, edge_color="#c5c9ce", width=1, ax=ax)
 nx.draw_networkx_edges(G, pos, edgelist=access_edges, edge_color="#e4572e", width=1.5, style="dashed", ax=ax)
 nx.draw_networkx_nodes(G, pos, nodelist=intersections, node_size=8, node_color="#8a919a", ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=snap_nodes, node_size=14, node_color="#f2a48c", ax=ax)
 nx.draw_networkx_nodes(G, pos, nodelist=sign_nodes, node_size=45, node_color="#e4572e", ax=ax)
 ax.set_aspect(1.35)
 ax.axis("off")
 plt.show()
 ```
 
-With the combined graph in hand, the next steps are: split street edges at
-each sign's true snap point instead of the nearest intersection, compute a
-sign-to-sign shortest-path distance matrix along the streets, and run a
+Every edge now carries a `length` in meters, including the split block
+segments and the sign access edges, so the next steps are direct: compute a
+sign-to-sign shortest-path distance matrix along the streets, then run a
 TSP-style solver over it for optimal collection routes.
