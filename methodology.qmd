@@ -1,0 +1,547 @@
+---
+title: "Sign Safari: how it works"
+format:
+  html:
+    embed-resources: true
+    toc: true
+engine: jupyter
+---
+
+<!--
+Skeleton document. Each section has terse bullets marking the points to
+write up; the code chunks are the real, runnable demonstrations. The Python
+here mirrors the production code paths:
+  - scripts/prepare_data.py  (raw AADL dump -> GeoJSON)
+  - scripts/build_network.py (OSM -> docs/data/network.json)
+  - docs/js/route.js         (client-side routing; ported to Python below)
+-->
+
+## Why this exists
+
+- AADL Summer Game: lawn signs with code words, scattered across town
+- The official map is a pin map; hard to plan an efficient walk
+- Goal: heat map + "seen it" tracking + a route planner that walks real streets
+- Everything is static files + client-side JS; this doc shows the data pipeline and algorithms behind it
+
+```{python}
+#| label: setup
+import json
+import math
+import sys
+from collections import defaultdict
+
+import matplotlib.pyplot as plt
+import networkx as nx
+import numpy as np
+import osmnx as ox
+from matplotlib.collections import LineCollection
+
+# Palette shared with the app (docs/js/route.js)
+C = {
+    "street": "#c9cdd4",
+    "sign": "#e8704a",
+    "route": "#2f3061",
+    "seed": "#ffb43b",
+    "snap": "#f2a48c",
+}
+```
+
+## Where the data comes from
+
+- Source: the AADL Summer Game map API (`aadl.org/summergame/map/data/SummerGame2026`), downloaded while logged in
+- One JSON dump: home lawn signs, business codes, badge locations
+- Coordinates and redemption counts per sign; addresses arrive as HTML strings
+
+```{python}
+#| label: raw-data
+raw = json.loads(open("summer_game_2026_raw.json").read())
+{key: len(records) for key, records in raw.items()}
+```
+
+```{python}
+#| label: raw-record
+rec = raw["homecodes"][0]
+{k: rec[k] for k in ["code_id", "homecode", "lat", "lon", "num_redemptions", "display"]}
+```
+
+## Cleaning it up
+
+- `scripts/prepare_data.py` converts the dump to compact GeoJSON in `docs/data/`
+- Drops records with missing/corrupt coordinates (Michigan-area sanity bbox)
+- Drops signs the API marks as hidden (`display != 1`)
+- Parses the HTML address blob into street / city / zip
+
+```{python}
+#| label: cleaning
+sys.path.insert(0, "scripts")
+from prepare_data import parse_address, parse_coords
+
+parse_address(rec["homecode"])
+```
+
+```{python}
+#| label: clean-counts
+kept = [r for r in raw["homecodes"] if parse_coords(r) and int(r.get("display", 0)) == 1]
+print(f"{len(kept)} of {len(raw['homecodes'])} home signs kept")
+
+signs_fc = json.loads(open("docs/data/signs.json").read())
+signs_fc["features"][0]
+```
+
+## Streets as a graph
+
+- Routing needs distances *along streets*, not as-the-crow-flies
+- OpenStreetMap already stores streets in graph shape: intersections are nodes, street segments are edges with lengths in meters
+- Downloaded via `osmnx`; the custom filter keeps real streets and paths but drops separately-mapped sidewalks, crossings, and driveways (they triple the graph without changing the routes people would actually describe)
+- Demo below uses a ~50-sign cluster around the Old West Side so the plots stay readable; production runs the same steps city-wide
+
+```{python}
+#| label: osm-download
+# Same filter as scripts/build_network.py
+OSM_FILTER = (
+    '["highway"~"primary|secondary|tertiary|unclassified|residential|'
+    'living_street|pedestrian|footway|path|steps|cycleway|track"]'
+    '["footway"!~"sidewalk|crossing"]["area"!="yes"]["access"!~"private"]'
+)
+
+CLUSTER_CENTER = (-83.770, 42.285)  # lon, lat: Old West Side
+def ground_dist2(feature):
+    lon, lat = feature["geometry"]["coordinates"]
+    return (lon - CLUSTER_CENTER[0]) ** 2 + ((lat - CLUSTER_CENTER[1]) * 1.35) ** 2
+
+cluster = sorted(signs_fc["features"], key=ground_dist2)[:50]
+lons = [f["geometry"]["coordinates"][0] for f in cluster]
+lats = [f["geometry"]["coordinates"][1] for f in cluster]
+PAD = 0.002  # ~200 m margin
+
+streets = ox.graph_from_bbox(
+    (min(lons) - PAD, min(lats) - PAD, max(lons) + PAD, max(lats) + PAD),
+    custom_filter=OSM_FILTER,
+)
+print(f"street graph: {len(streets.nodes)} intersections, {len(streets.edges)} edges")
+```
+
+```{python}
+#| label: fig-streets
+#| fig-cap: "Raw OSM walking network for the demo cluster."
+fig, ax = ox.plot_graph(
+    streets, node_size=6, node_color="#8a919a",
+    edge_color=C["street"], edge_linewidth=1, bgcolor="white", show=False,
+)
+plt.show()
+```
+
+## Snapping signs into the network
+
+- A sign pinned to its nearest *intersection* would be wrong by up to half a block
+- Instead: find the sign's nearest street edge, split that edge at the point on the road closest to the sign, insert a `snap` node there
+- The sign hangs off its snap node as a leaf via a short `access` edge
+- Blocks with several signs get split once per sign, in order along the block
+- Result: every sign is a node, and path distances between signs are exact street distances
+
+```{python}
+#| label: snap
+from shapely.geometry import LineString, Point
+
+G = nx.Graph(streets.to_undirected())
+nx.set_node_attributes(G, "intersection", "node_type")
+nx.set_edge_attributes(G, "street", "edge_type")
+
+def edge_line(u, v, k):
+    """The street edge's geometry, falling back to a straight line."""
+    data = streets.edges[u, v, k]
+    if "geometry" in data:
+        return data["geometry"]
+    return LineString([
+        (streets.nodes[u]["x"], streets.nodes[u]["y"]),
+        (streets.nodes[v]["x"], streets.nodes[v]["y"]),
+    ])
+
+edge_hits = ox.distance.nearest_edges(streets, X=lons, Y=lats)
+signs_on_edge = defaultdict(list)
+for feature, (u, v, k) in zip(cluster, edge_hits):
+    signs_on_edge[tuple(sorted((u, v)))].append((u, v, k, feature))
+
+for group in signs_on_edge.values():
+    u, v, k, _ = group[0]  # one reference orientation for positions
+    line = edge_line(u, v, k)
+    length_m = streets.edges[u, v, k]["length"]
+    positions = sorted(
+        ((line.project(Point(f["geometry"]["coordinates"]), normalized=True), f)
+         for _, _, _, f in group),
+        key=lambda pair: pair[0],
+    )
+
+    G.remove_edge(u, v)
+    prev_node, prev_frac = u, 0.0
+    for frac, feature in positions:
+        lon, lat = feature["geometry"]["coordinates"]
+        snap = line.interpolate(frac, normalized=True)
+        sign_id = f"sign-{feature['properties']['id']}"
+        snap_id = f"snap-{feature['properties']['id']}"
+        G.add_node(snap_id, node_type="snap", x=snap.x, y=snap.y)
+        G.add_edge(prev_node, snap_id, edge_type="street",
+                   length=(frac - prev_frac) * length_m)
+        G.add_node(sign_id, node_type="sign", x=lon, y=lat,
+                   addr=feature["properties"]["addr"])
+        G.add_edge(sign_id, snap_id, edge_type="access",
+                   length=ox.distance.great_circle(lat, lon, snap.y, snap.x))
+        prev_node, prev_frac = snap_id, frac
+    G.add_edge(prev_node, v, edge_type="street",
+               length=(1.0 - prev_frac) * length_m)
+
+types = nx.get_node_attributes(G, "node_type")
+print(f"combined graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+print(f"  {sum(t == 'intersection' for t in types.values())} intersections, "
+      f"{sum(t == 'snap' for t in types.values())} snap points, "
+      f"{sum(t == 'sign' for t in types.values())} signs")
+```
+
+```{python}
+#| label: fig-snap
+#| fig-cap: "Streets (gray) with signs (orange) attached via snap nodes that split their nearest street edge."
+pos = {n: (d["x"], d["y"]) for n, d in G.nodes(data=True)}
+by_type = lambda t: [n for n, d in G.nodes(data=True) if d["node_type"] == t]
+street_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "street"]
+access_edges = [(u, v) for u, v, d in G.edges(data=True) if d["edge_type"] == "access"]
+
+fig, ax = plt.subplots(figsize=(9, 9))
+nx.draw_networkx_edges(G, pos, edgelist=street_edges, edge_color=C["street"], width=1, ax=ax)
+nx.draw_networkx_edges(G, pos, edgelist=access_edges, edge_color=C["sign"], width=1.5, style="dashed", ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=by_type("intersection"), node_size=8, node_color="#8a919a", ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=by_type("snap"), node_size=14, node_color=C["snap"], ax=ax)
+nx.draw_networkx_nodes(G, pos, nodelist=by_type("sign"), node_size=45, node_color=C["sign"], ax=ax)
+ax.set_aspect(1.35)
+ax.axis("off")
+plt.show()
+```
+
+## The full shipped network
+
+- `scripts/build_network.py` runs the same steps for the whole Ann Arbor + Ypsilanti core
+- A few signs sit far outside town (toward Detroit); a bbox over all of them pulls in a 766k-node network, so the core bbox clamps it and those signs are excluded from routing
+- Only the largest connected component holding the most signs is kept (bbox-border fragments would strand the router)
+- Serialized as flat arrays (`nodes: [lon, lat, ...]`, `edges: [a, b, meters, ...]`) so the browser payload stays ~0.9 MB (~280 KB gzipped)
+
+```{python}
+#| label: load-network
+net = json.loads(open("docs/data/network.json").read())
+coords = np.array(net["nodes"]).reshape(-1, 2)
+edges = np.array(net["edges"]).reshape(-1, 3)
+sign_nodes = [s["n"] for s in net["signs"]]
+print(f"{len(coords)} nodes, {len(edges)} edges, {len(net['signs'])} signs "
+      f"(built {net['generated']})")
+```
+
+```{python}
+#| label: fig-full-network
+#| fig-cap: "The full routable network: every street edge, with all signs snapped in."
+segs = np.stack([coords[edges[:, 0].astype(int)], coords[edges[:, 1].astype(int)]], axis=1)
+
+fig, ax = plt.subplots(figsize=(10, 7))
+ax.add_collection(LineCollection(segs, colors=C["street"], linewidths=0.4))
+ax.scatter(coords[sign_nodes, 0], coords[sign_nodes, 1], s=2, c=C["sign"])
+ax.set_aspect(1.35)
+ax.autoscale()
+ax.axis("off")
+plt.show()
+```
+
+## Shortest paths: Dijkstra
+
+- Everything downstream needs "street distance from node X to every sign"
+- Plain Dijkstra over the whole graph per source node; the graph is small enough (~20k nodes) that one full run is cheap
+- The app caches full results per source (LRU) since greedy and 2-opt revisit the same sources constantly
+- `prev[]` back-pointers double as the actual street path for drawing legs
+
+```{python}
+#| label: dijkstra
+import heapq
+
+def build_adjacency(net):
+    adj = [[] for _ in range(len(net["nodes"]) // 2)]
+    e = net["edges"]
+    for i in range(0, len(e), 3):
+        a, b, w = e[i], e[i + 1], e[i + 2]
+        adj[a].append((b, w))
+        adj[b].append((a, w))
+    return adj
+
+def dijkstra(adj, src):
+    dist = [math.inf] * len(adj)
+    prev = [-1] * len(adj)
+    dist[src] = 0.0
+    heap = [(0.0, src)]
+    while heap:
+        d, u = heapq.heappop(heap)
+        if d > dist[u]:
+            continue  # stale entry
+        for v, w in adj[u]:
+            nd = d + w
+            if nd < dist[v]:
+                dist[v] = nd
+                prev[v] = u
+                heapq.heappush(heap, (nd, v))
+    return dist, prev
+
+adj = build_adjacency(net)
+
+# Cache full Dijkstra results per source, like the app's LRU.
+_dijkstra_cache = {}
+def shortest(node):
+    if node not in _dijkstra_cache:
+        _dijkstra_cache[node] = dijkstra(adj, node)
+    return _dijkstra_cache[node]
+
+# "Distance from node X to every sign" rows, the workhorse lookup.
+def sign_row(node):
+    dist, _ = shortest(node)
+    return [dist[n] for n in sign_nodes]
+```
+
+```{python}
+#| label: fig-distance-field
+#| fig-cap: "Street distance from one seed sign to every other sign. Note it follows the street grid, not straight-line distance."
+seed_i = min(range(len(net["signs"])),
+             key=lambda i: ground_dist2({"geometry": {"coordinates": coords[sign_nodes[i]]}}))
+seed_node = sign_nodes[seed_i]
+row = np.array(sign_row(seed_node))
+
+fig, ax = plt.subplots(figsize=(10, 7))
+ax.add_collection(LineCollection(segs, colors=C["street"], linewidths=0.4))
+sc = ax.scatter(coords[sign_nodes, 0], coords[sign_nodes, 1], s=6,
+                c=np.clip(row / 1000, 0, 12), cmap="viridis")
+ax.scatter(*coords[seed_node], s=120, c=C["seed"], edgecolors=C["route"], zorder=3)
+fig.colorbar(sc, ax=ax, label="km along streets (clipped at 12)")
+ax.set_aspect(1.35)
+ax.autoscale()
+ax.axis("off")
+plt.show()
+```
+
+## Building a route: greedy nearest-unvisited
+
+- The real problem is a budgeted orienteering/TSP variant: visit as many signs as possible within a distance (or count) budget -- NP-hard, so heuristics
+- Greedy draft: from the seed, repeatedly walk to the nearest sign that still fits the budget
+- With the loop-back option, "fits the budget" includes the leg home; the undirected graph means the seed's own distance row doubles as "distance home"
+- Mirrors `greedyExtend` in `docs/js/route.js`
+
+```{python}
+#| label: greedy
+def greedy_extend(seed_node, stops, spent_meters, max_meters=math.inf,
+                  max_count=math.inf, loop=False):
+    """Extend a stop order in place; returns how many signs were added."""
+    home = sign_row(seed_node)
+    todo = set(range(len(sign_nodes))) - set(stops)
+    total = spent_meters
+    cursor = sign_nodes[stops[-1]] if stops else seed_node
+    added = 0
+    while todo and len(stops) < max_count:
+        row = sign_row(cursor)
+        best, best_d = -1, math.inf
+        for c in todo:
+            if row[c] >= best_d:
+                continue
+            if total + row[c] + (home[c] if loop else 0) > max_meters:
+                continue
+            best, best_d = c, row[c]
+        if best < 0 or not math.isfinite(best_d):
+            break
+        stops.append(best)
+        todo.discard(best)
+        total += best_d
+        added += 1
+        cursor = sign_nodes[best]
+    return added
+
+def route_totals(seed_node, stops, loop=False):
+    home = sign_row(seed_node)
+    path_m, prev_node = 0.0, seed_node
+    for si in stops:
+        path_m += sign_row(prev_node)[si]
+        prev_node = sign_nodes[si]
+    home_m = home[stops[-1]] if loop and stops else 0.0
+    return path_m, path_m + home_m
+
+BUDGET_M = 4500  # a 4.5 km walk...
+LOOP = True      # ...that loops back to the start
+stops = []
+greedy_extend(seed_node, stops, 0.0, max_meters=BUDGET_M, loop=LOOP)
+_, total_m = route_totals(seed_node, stops, loop=LOOP)
+print(f"greedy: {len(stops)} signs in {total_m / 1000:.2f} km (incl. the leg home)")
+```
+
+```{python}
+#| label: route-plot-helper
+def legs_for(seed_node, stops, loop=False):
+    """Street-node path for each leg, walking prev[] back from the leg's end."""
+    targets = [sign_nodes[s] for s in stops]
+    if loop and stops:
+        targets.append(seed_node)
+    legs, frm = [], seed_node
+    for to in targets:
+        _, prev = shortest(frm)
+        leg = []
+        v = to
+        while v != -1:
+            leg.append(v)
+            v = prev[v]
+        legs.append(leg[::-1])
+        frm = to
+    return legs
+
+def plot_route(stops, seed_node, loop=False, ax=None, pad=0.004, numbered=True):
+    legs = legs_for(seed_node, stops, loop)
+    path = np.array([coords[n] for leg in legs for n in leg])
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 8))
+    ax.add_collection(LineCollection(segs, colors=C["street"], linewidths=0.6))
+    ax.scatter(coords[sign_nodes, 0], coords[sign_nodes, 1], s=5, c=C["sign"], alpha=0.6)
+    ax.plot(path[:, 0], path[:, 1], color=C["route"], linewidth=2.5,
+            solid_joinstyle="round", zorder=3)
+    ax.scatter(*coords[seed_node], s=170, c=C["seed"], edgecolors="white", zorder=4)
+    for i, si in enumerate(stops):
+        x, y = coords[sign_nodes[si]]
+        ax.scatter(x, y, s=140, c=C["route"], edgecolors="white", zorder=4)
+        if numbered:
+            ax.annotate(str(i + 1), (x, y), color="white", fontsize=7,
+                        fontweight="bold", ha="center", va="center", zorder=5)
+    ax.set_xlim(path[:, 0].min() - pad, path[:, 0].max() + pad)
+    ax.set_ylim(path[:, 1].min() - pad, path[:, 1].max() + pad)
+    ax.set_aspect(1.35)
+    ax.axis("off")
+    return ax
+```
+
+```{python}
+#| label: fig-greedy
+#| fig-cap: "Greedy draft: always walk to the nearest unvisited sign that fits the budget (including the leg back to the start)."
+plot_route(stops, seed_node, loop=LOOP)
+plt.show()
+```
+
+## Multi-start: racing the opening move
+
+- Greedy is myopic about its first pick; a slightly farther opener can unlock a denser pocket of signs
+- Run greedy once from each of the k nearest viable first signs, dedupe converged routes, keep the best
+- Winner rule: more signs first, fewer meters breaks ties
+- The app animates the candidates racing outward together (`buildCandidates` in `route.js`)
+
+```{python}
+#| label: multi-start
+def build_candidates(seed_node, max_meters=math.inf, max_count=math.inf,
+                     loop=False, k=4):
+    home = sign_row(seed_node)
+    openers = sorted(
+        (home[i], i) for i in range(len(sign_nodes))
+        if math.isfinite(home[i]) and home[i] + (home[i] if loop else 0) <= max_meters
+    )
+    seen, candidates = set(), []
+    for d, first in openers[:k]:
+        stops = [first]
+        greedy_extend(seed_node, stops, d, max_meters, max_count, loop)
+        key = tuple(stops)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(stops)
+    return candidates
+
+candidates = build_candidates(seed_node, max_meters=BUDGET_M, loop=LOOP)
+for label, cand in zip("ABCD", candidates):
+    _, m = route_totals(seed_node, cand, loop=LOOP)
+    print(f"route {label}: opens at {net['signs'][cand[0]]['addr']:<24} "
+          f"{len(cand)} signs, {m / 1000:.2f} km")
+
+winner = max(candidates,
+             key=lambda c: (len(c), -route_totals(seed_node, c, loop=LOOP)[1]))
+```
+
+## Untangling with 2-opt
+
+- Greedy routes cross over themselves; 2-opt reverses segments while the total path (plus the loop leg home, if any) gets shorter
+- The seed stays a fixed anchor; only the visiting order of stops changes
+- Repeats passes until no reversal helps (capped at 10)
+- The app yields after each accepted reversal to animate it (`twoOptSteps` in `route.js`)
+
+```{python}
+#| label: two-opt
+def two_opt(seed_node, stops, loop=False):
+    """Improve the stop order in place; returns meters saved."""
+    home = sign_row(seed_node)
+    node_of = lambda p: seed_node if p < 0 else sign_nodes[stops[p]]
+    D = lambda p, q: sign_row(node_of(p))[stops[q]]
+    saved = 0.0
+    for _pass in range(10):
+        improved = False
+        for i in range(len(stops) - 1):
+            for j in range(i + 1, len(stops)):
+                delta = D(i - 1, j) - D(i - 1, i)
+                if j + 1 < len(stops):
+                    delta += D(i, j + 1) - D(j, j + 1)
+                elif loop:
+                    delta += home[stops[i]] - home[stops[j]]
+                if delta < -0.01:
+                    stops[i:j + 1] = stops[i:j + 1][::-1]
+                    saved -= delta
+                    improved = True
+        if not improved:
+            break
+    return saved
+
+before = list(winner)
+saved = two_opt(seed_node, winner, loop=LOOP)
+print(f"2-opt saved {saved:.0f} m "
+      f"({route_totals(seed_node, before, loop=LOOP)[1] / 1000:.2f} km -> "
+      f"{route_totals(seed_node, winner, loop=LOOP)[1] / 1000:.2f} km)")
+```
+
+```{python}
+#| label: fig-two-opt
+#| fig-cap: "The winning greedy route before (left) and after (right) 2-opt."
+fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+plot_route(before, seed_node, loop=LOOP, ax=axes[0], numbered=False)
+plot_route(winner, seed_node, loop=LOOP, ax=axes[1], numbered=False)
+axes[0].set_title("greedy draft")
+axes[1].set_title(f"after 2-opt (-{saved:.0f} m)")
+plt.show()
+```
+
+## Spending the freed-up budget
+
+- 2-opt shortens the path, which frees budget in distance mode; greedy runs again from the last stop to spend it
+- Alternate 2-opt and refill until neither helps (the app caps this at 3 rounds)
+
+```{python}
+#| label: refill
+for round_ in range(3):
+    path_m, _ = route_totals(seed_node, winner, loop=LOOP)
+    added = greedy_extend(seed_node, winner, path_m, max_meters=BUDGET_M, loop=LOOP)
+    if not added:
+        break
+    saved = two_opt(seed_node, winner, loop=LOOP)
+    print(f"round {round_ + 1}: +{added} signs, then 2-opt saved {saved:.0f} m")
+
+_, total_m = route_totals(seed_node, winner, loop=LOOP)
+print(f"final: {len(winner)} signs in {total_m / 1000:.2f} km "
+      f"(~{total_m / 1000 * 12:.0f} min at a casual pace)")
+```
+
+```{python}
+#| label: fig-final
+#| fig-cap: "The final 4.5 km loop, stops numbered in visiting order."
+plot_route(winner, seed_node, loop=LOOP)
+plt.show()
+```
+
+## From this notebook to the browser
+
+- All of the above runs client-side in `docs/js/route.js`, ported from these exact steps
+- Graph lives in typed arrays (CSR adjacency, `Float32Array` binary heap) so a full Dijkstra is a few ms on a phone
+- Dijkstra results are LRU-cached per source node; an 80-stop build touches ~80 sources during 2-opt
+- The build is narrated and animated: candidates race, the winner unspools, 2-opt reversals play out one at a time
+- Loop-back-to-start and skip-already-seen-signs are options on the same machinery
+- Routes export as GPX (waypoints per stop + full track) for watches
+- Start point can be geolocation, a Photon address search, or any tapped sign, snapped to the nearest network node
+
+<!-- TODO: closing thoughts / link back to the app -->
