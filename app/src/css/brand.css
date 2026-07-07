@@ -1,0 +1,136 @@
+/* ---------- Header ---------- */
+
+.app-header {
+  position: fixed;
+  top: calc(10px + env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.brand {
+  position: relative;
+  pointer-events: auto;
+  background: var(--color-navy);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1.5px, transparent 1.5px);
+  background-size: 14px 14px;
+  border-radius: var(--radius-card);
+  padding: 10px 18px 12px 16px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.brand-splat {
+  position: absolute;
+  top: -6px;
+  left: -14px;
+  width: 190px;
+  height: auto;
+  fill: var(--color-blue);
+  opacity: 0.32;
+  pointer-events: none;
+}
+
+.brand-text { position: relative; }
+
+.brand-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.info-btn {
+  flex: none;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: 1.5px solid rgba(255, 255, 255, 0.45);
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.info-btn:active { background: rgba(255, 255, 255, 0.18); }
+
+.brand h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 24px;
+  line-height: 1.05;
+  color: #fff;
+  letter-spacing: 0.3px;
+}
+
+.brand p {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--color-gold);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+/* Progress pill: white pill w/ chunky navy text, like the poster date badge */
+.progress-pill {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  background: #fff;
+  color: var(--color-navy);
+  border: none;
+  border-radius: 999px;
+  padding: 10px 18px 11px;
+  font-family: var(--font-display);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.progress-pill:active { transform: scale(0.96); }
+
+.progress-count {
+  font-size: 19px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.progress-count::after { content: ""; }
+
+.progress-total {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: #7a7ca6;
+}
+
+/* Angled four-color bar, echoing the play.aadl.org logo mark */
+.progress-bar {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: #e9e7f2;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  position: absolute;
+  inset: 0 100% 0 0;
+  background: linear-gradient(100deg, var(--color-blue) 0 28%, var(--color-green) 28% 52%, var(--color-coral) 52% 76%, var(--color-gold) 76% 100%);
+  border-radius: 3px;
+  transition: inset-inline-end 0.5s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+

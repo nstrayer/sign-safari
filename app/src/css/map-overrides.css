@@ -1,0 +1,25 @@
+/* ---------- MapLibre control restyling ---------- */
+
+.maplibregl-ctrl-top-right {
+  top: calc(150px + env(safe-area-inset-top));
+}
+
+.maplibregl-ctrl-group {
+  border-radius: 14px !important;
+  box-shadow: var(--shadow-card) !important;
+  overflow: hidden;
+}
+
+.maplibregl-ctrl-group button {
+  width: 42px !important;
+  height: 42px !important;
+}
+
+.maplibregl-ctrl-group button + button { border-top: 1px solid #eeecf5 !important; }
+
+.maplibregl-ctrl-attrib {
+  border-radius: 10px 0 0 0 !important;
+  font-size: 10px !important;
+  background: rgba(255, 255, 255, 0.75) !important;
+}
+
