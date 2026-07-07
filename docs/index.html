@@ -78,11 +78,14 @@
             <button class="mode-btn is-active" id="modeDistance">Distance</button>
             <button class="mode-btn" id="modeCount">Sign count</button>
           </div>
-          <label class="skip-row"><input type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
         </div>
         <div class="route-row">
           <input type="range" id="budgetSlider" min="0.5" max="15" step="0.5" value="3" aria-label="Route budget" />
           <span class="budget-label" id="budgetLabel">3.0 km</span>
+        </div>
+        <div class="route-row route-row-checks">
+          <label class="skip-row"><input type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
+          <label class="skip-row"><input type="checkbox" id="loopBack" /><span>Loop back to start</span></label>
         </div>
         <p class="route-summary" id="routeSummary" hidden></p>
         <div class="route-actions" id="routeActions" hidden>

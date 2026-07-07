@@ -1181,3 +1181,5 @@ body.route-mode .search-wrap { display: none; }
   background: var(--gold);
   color: var(--navy);
 }
+
+.route-stops li.stop-start:last-child::before { content: "F"; }

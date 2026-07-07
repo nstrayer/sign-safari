@@ -154,8 +154,9 @@ function makeDijkstraCache(graph, cap = 48) {
 
 // The seed is any node on the network (a sign's node, or the node nearest a
 // geolocation/address). A sign sitting exactly at the seed is simply the
-// first greedy pick at 0 m.
-function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }) {
+// first greedy pick at 0 m. With `loop`, the route returns to the seed and
+// the budget covers the leg home.
+function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded, loop }) {
   const { signs } = graph;
   // Distances from a node to all signs, as compact per-stop rows.
   const rows = new Map();
@@ -175,15 +176,24 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }
     if (!excluded.has(i)) todo.add(i);
   }
 
+  // Distance from the seed to each sign; undirected graph, so this is also
+  // each sign's cost of the leg back home when looping.
+  const homeRow = rowFor(seedNode);
+
   let total = 0;
   let cursor = seedNode;
   while (todo.size && stopSigns.length < maxCount) {
     const row = rowFor(cursor);
+    // Nearest candidate that still fits the budget (including, for loops,
+    // the return leg from that candidate).
     let best = -1, bestD = Infinity;
     for (const c of todo) {
-      if (row[c] < bestD) { bestD = row[c]; best = c; }
+      if (row[c] >= bestD) continue;
+      if (total + row[c] + (loop ? homeRow[c] : 0) > maxMeters) continue;
+      bestD = row[c];
+      best = c;
     }
-    if (best < 0 || !isFinite(bestD) || total + bestD > maxMeters) break;
+    if (best < 0 || !isFinite(bestD)) break;
     stopSigns.push(best);
     todo.delete(best);
     total += bestD;
@@ -191,7 +201,7 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }
   }
 
   // 2-opt with the seed as a fixed anchor before position 0: reverse
-  // segments while the open path gets shorter.
+  // segments while the path (plus the leg home, when looping) gets shorter.
   const nodeOf = (p) => (p < 0 ? seedNode : signs[stopSigns[p]].n);
   const D = (p, signPos) => rowFor(nodeOf(p))[stopSigns[signPos]];
   let improved = stopSigns.length > 1;
@@ -201,6 +211,7 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }
       for (let j = i + 1; j < stopSigns.length; j++) {
         let delta = D(i - 1, j) - D(i - 1, i);
         if (j + 1 < stopSigns.length) delta += D(i, j + 1) - D(j, j + 1);
+        else if (loop) delta += homeRow[stopSigns[i]] - homeRow[stopSigns[j]];
         if (delta < -0.01) {
           let lo = i, hi = j;
           while (lo < hi) { const t = stopSigns[lo]; stopSigns[lo++] = stopSigns[hi]; stopSigns[hi--] = t; }
@@ -212,6 +223,7 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }
 
   total = 0;
   for (let i = 0; i < stopSigns.length; i++) total += D(i - 1, i);
+  if (loop && stopSigns.length) total += homeRow[stopSigns[stopSigns.length - 1]];
 
   // Node path for each leg, walking prev[] back from the leg's end.
   const pathNodes = [];
@@ -221,6 +233,13 @@ function buildRoute(graph, shortest, seedNode, { maxMeters, maxCount, excluded }
     for (let v = nodeOf(i); v !== -1; v = prev[v]) leg.push(v);
     leg.reverse();
     pathNodes.push(...(i === 0 ? leg : leg.slice(1)));
+  }
+  if (loop && stopSigns.length) {
+    const { prev } = shortest(nodeOf(stopSigns.length - 1));
+    const leg = [];
+    for (let v = seedNode; v !== -1; v = prev[v]) leg.push(v);
+    leg.reverse();
+    pathNodes.push(...leg.slice(1));
   }
 
   return { stopSigns, totalMeters: total, pathNodes };
@@ -249,6 +268,7 @@ export function createRoutePlanner({ store, showToast }) {
     slider: el("budgetSlider"),
     budgetLabel: el("budgetLabel"),
     skipSeen: el("skipSeen"),
+    loopBack: el("loopBack"),
     summary: el("routeSummary"),
     actions: el("routeActions"),
     exportGpx: el("exportGpx"),
@@ -700,6 +720,7 @@ export function createRoutePlanner({ store, showToast }) {
   els.slider.addEventListener("input", () => { els.budgetLabel.textContent = budgetText(); });
   els.slider.addEventListener("change", rebuild);
   els.skipSeen.addEventListener("change", rebuild);
+  els.loopBack.addEventListener("change", rebuild);
   store.onSeenChange(() => scheduleDraw());
 
   // ---------- Build + result ----------
@@ -723,6 +744,7 @@ export function createRoutePlanner({ store, showToast }) {
         maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
         maxCount: mode === "count" ? +els.slider.value : Infinity,
         excluded,
+        loop: els.loopBack.checked,
       });
       routePath = new Path2D();
       route.pathNodes.forEach((n, i) => {
@@ -766,6 +788,12 @@ export function createRoutePlanner({ store, showToast }) {
         view.scale = Math.max(view.scale, view.fitScale * 12);
         scheduleDraw();
       });
+      els.stops.appendChild(li);
+    }
+    if (els.loopBack.checked) {
+      const li = document.createElement("li");
+      li.className = "stop-start";
+      li.textContent = `Finish - back at ${seed.label}`;
       els.stops.appendChild(li);
     }
     els.stops.hidden = false;
