@@ -3,8 +3,8 @@ import "./styles.css";
 
 import { createStore } from "./store";
 import { createSignMap } from "./map";
-import { createSearch } from "./search.js";
-import { createUi, createWelcome } from "./ui.js";
+import { createSearch } from "./search";
+import { createUi, createWelcome } from "./ui";
 import { createRoutePlanner } from "./route.js";
 
 async function fetchJson(url) {

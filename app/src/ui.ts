@@ -1,33 +1,66 @@
 // UI: detail bottom sheet, progress pill + panel, toasts.
 
-function fmtWhen(epochSec) {
+import { el } from "./dom";
+import type { Store } from "./store";
+import type { Kind, LonLat, SignProps, TappedFeature } from "./types";
+
+/** What the seen list and search index know about each feature. */
+export interface SignIndexEntry {
+  label: string;
+  kind: Kind;
+  coords: LonLat;
+  props: SignProps;
+}
+
+export interface Welcome {
+  open(): void;
+  close(): void;
+  isOpen(): boolean;
+}
+
+export interface Ui {
+  openSheet(feature: TappedFeature): void;
+  closeSheet(): void;
+  showToast(msg: string, undoFn?: () => void): void;
+  setDataStamp(iso: string | undefined): void;
+}
+
+interface UiOptions {
+  store: Store;
+  totalTrackable: number;
+  signIndexById: Map<string, SignIndexEntry>;
+  onFlyTo: (coords: LonLat) => void;
+  welcome: Welcome;
+}
+
+function fmtWhen(epochSec: number): string {
   const d = new Date(epochSec * 1000);
   const today = new Date().setHours(0, 0, 0, 0);
   if (d.getTime() >= today) return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return d.toLocaleDateString([], { month: "short", day: "numeric" });
 }
 
-const KIND_LABELS = { sign: "Lawn sign", biz: "Business code", badge: "Badge spot" };
+const KIND_LABELS: Record<Kind, string> = { sign: "Lawn sign", biz: "Business code", badge: "Badge spot" };
 
 // Welcome / info modal. Created before the data fetch so it appears
 // immediately on a first visit, and wired to the header's "?" button.
-export function createWelcome(store) {
-  const welcome = document.getElementById("welcomePanel");
-  const backdrop = document.getElementById("welcomeBackdrop");
+export function createWelcome(store: Store): Welcome {
+  const welcome = el("welcomePanel");
+  const backdrop = el("welcomeBackdrop");
 
-  function open() {
+  function open(): void {
     welcome.hidden = false;
     backdrop.hidden = false;
   }
 
-  function close() {
+  function close(): void {
     welcome.hidden = true;
     backdrop.hidden = true;
     store.setWelcomed();
   }
 
-  document.getElementById("welcomeGo").addEventListener("click", close);
-  document.getElementById("infoBtn").addEventListener("click", open);
+  el("welcomeGo").addEventListener("click", close);
+  el("infoBtn").addEventListener("click", open);
   backdrop.addEventListener("click", close);
 
   if (!store.wasWelcomed()) open();
@@ -35,8 +68,7 @@ export function createWelcome(store) {
   return { open, close, isOpen: () => !welcome.hidden };
 }
 
-export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcome }) {
-  const el = (id) => document.getElementById(id);
+export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcome }: UiOptions): Ui {
   const els = {
     pill: el("progressPill"),
     count: el("progressCount"),
@@ -49,7 +81,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     sub: el("detailSub"),
     stat: el("detailStat"),
     codeRow: el("codeRow"),
-    codeInput: el("codeInput"),
+    codeInput: el<HTMLInputElement>("codeInput"),
     codeSave: el("codeSave"),
     seenBtn: el("seenBtn"),
     copyCodesBtn: el("copyCodesBtn"),
@@ -61,9 +93,9 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     statPct: el("statPct"),
     seenList: el("seenList"),
     seenEmpty: el("seenEmpty"),
-    toggleHideSeen: el("toggleHideSeen"),
-    toggleBiz: el("toggleBiz"),
-    toggleBadges: el("toggleBadges"),
+    toggleHideSeen: el<HTMLInputElement>("toggleHideSeen"),
+    toggleBiz: el<HTMLInputElement>("toggleBiz"),
+    toggleBadges: el<HTMLInputElement>("toggleBadges"),
     exportBtn: el("exportBtn"),
     importBtn: el("importBtn"),
     aboutBtn: el("aboutBtn"),
@@ -73,12 +105,12 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     toastUndo: el("toastUndo"),
   };
 
-  let current = null; // feature currently in the detail sheet
-  let toastTimer = null;
+  let current: TappedFeature | null = null; // feature currently in the detail sheet
+  let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
   // ---------- Progress ----------
 
-  function renderProgress() {
+  function renderProgress(): void {
     const n = store.count();
     els.count.textContent = n.toLocaleString();
     els.total.textContent = `/ ${totalTrackable.toLocaleString()} seen`;
@@ -89,7 +121,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     els.statPct.textContent = `${pct < 10 ? pct.toFixed(1) : Math.round(pct)}%`;
   }
 
-  function renderSeenList() {
+  function renderSeenList(): void {
     els.seenList.innerHTML = "";
     const recent = store.recent(20);
     els.seenEmpty.hidden = recent.length > 0;
@@ -124,7 +156,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
 
   // ---------- Detail sheet ----------
 
-  function openSheet(feature) {
+  function openSheet(feature: TappedFeature): void {
     current = feature;
     const { kind, props } = feature;
     els.kind.textContent = KIND_LABELS[kind] ?? "Sign";
@@ -142,19 +174,19 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     requestAnimationFrame(() => els.sheet.classList.add("open"));
   }
 
-  function renderSeenBtn() {
+  function renderSeenBtn(): void {
     if (!current || current.kind === "badge") return;
     const seen = store.isSeen(current.id);
     els.seenBtn.classList.toggle("is-seen", seen);
     if (seen) {
-      const at = store.seenAt(current.id);
+      const at = store.seenAt(current.id) ?? 0;
       els.seenBtn.textContent = `Seen ${fmtWhen(at)} - tap to undo`;
     } else {
       els.seenBtn.textContent = "Mark as seen";
     }
   }
 
-  function closeSheet() {
+  function closeSheet(): void {
     current = null;
     els.sheet.classList.remove("open");
     els.sheetBackdrop.hidden = true;
@@ -173,7 +205,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     });
   });
 
-  function saveCode() {
+  function saveCode(): void {
     if (!current) return;
     const had = store.getCode(current.id);
     const val = els.codeInput.value;
@@ -194,7 +226,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
   els.sheetBackdrop.addEventListener("click", closeSheet);
 
   // Swipe-down to close (simple: drag on handle/sheet body top)
-  let touchStartY = null;
+  let touchStartY: number | null = null;
   els.sheet.addEventListener("touchstart", (e) => { touchStartY = e.touches[0].clientY; }, { passive: true });
   els.sheet.addEventListener("touchend", (e) => {
     if (touchStartY !== null && e.changedTouches[0].clientY - touchStartY > 60) closeSheet();
@@ -203,7 +235,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
 
   // ---------- Progress panel ----------
 
-  function openPanel() {
+  function openPanel(): void {
     renderProgress();
     renderSeenList();
     const n = store.codeCount();
@@ -211,7 +243,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     els.panel.hidden = false;
   }
 
-  function closePanel() {
+  function closePanel(): void {
     els.panel.hidden = true;
   }
 
@@ -267,7 +299,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
   });
 
   els.importBtn.addEventListener("click", async () => {
-    let text;
+    let text: string | null;
     try {
       text = await navigator.clipboard.readText();
     } catch {
@@ -286,7 +318,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
 
   // ---------- Toast ----------
 
-  function showToast(msg, undoFn) {
+  function showToast(msg: string, undoFn?: () => void): void {
     clearTimeout(toastTimer);
     els.toastMsg.textContent = msg;
     els.toastUndo.hidden = !undoFn;
@@ -301,7 +333,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     toastTimer = setTimeout(hideToast, 3200);
   }
 
-  function hideToast() {
+  function hideToast(): void {
     els.toast.classList.remove("show");
     setTimeout(() => { els.toast.hidden = true; }, 300);
   }
