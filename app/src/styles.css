@@ -28,10 +28,24 @@
   --radius-card: 18px;
   --font-display: "Baloo 2", "Nunito Sans", sans-serif;
   --font-body: "Nunito Sans", system-ui, sans-serif;
+  /* The app's two layout switches: wide = route drawer docks right,
+     desk = header/panel/sheet take their desktop positions. */
+  --breakpoint-wide: 720px;
+  --breakpoint-desk: 900px;
 }
 
 /* JS toggles these state classes; expose them as variants so markup can say
-   e.g. open:translate-y-0 while the JS keeps toggling plain .open. */
+   e.g. open:translate-y-0 while the JS keeps toggling plain .open. Named
+   `selected` (not `active`) so Tailwind's built-in :active variant keeps
+   working for press feedback. */
 @custom-variant open (&.open);
-@custom-variant active (&.is-active);
+@custom-variant selected (&.is-active);
+@custom-variant seen (&.is-seen);
 @custom-variant shown (&.show);
+
+/* Navy poster ground with golden-halftone-style dots (brand card, panel
+   header). */
+@utility bg-halftone {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1.5px, transparent 1.5px);
+  background-size: 14px 14px;
+}
