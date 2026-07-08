@@ -1,11 +1,15 @@
 // localStorage-backed "seen" store with pub/sub.
 // sg2026.seen  -> { "<id>": <epoch seconds marked>, ... }
 // sg2026.codes -> { "<id>": "<code word from the physical sign>", ... }
+// sg2026.mysigns -> { "<id>": [lon, lat], ... } signs the user placed themselves
 // sg2026.settings -> { hideSeen, showBiz, showBadges }
 // sg2026.welcomed -> "1" once the intro modal has been dismissed
 
+import type { LonLat } from "./types";
+
 const SEEN_KEY = "sg2026.seen";
 const CODES_KEY = "sg2026.codes";
+const MY_SIGNS_KEY = "sg2026.mysigns";
 const SETTINGS_KEY = "sg2026.settings";
 const VERSION_KEY = "sg2026.v";
 const WELCOMED_KEY = "sg2026.welcomed";
@@ -34,6 +38,11 @@ export interface Store {
   setCode(id: string, code: string): void;
   /** Records a code for a sign that isn't in the map data. Returns its id, or null if blank/duplicate. */
   addManualCode(code: string): string | null;
+  mySigns(): { id: string; coords: LonLat }[];
+  /** Places a user sign at coords, marked seen; returns its id. */
+  addMySign(coords: LonLat, code?: string): string;
+  /** Deletes a user sign along with its code and seen mark. */
+  removeMySign(id: string): void;
   codeCount(): number;
   /** Codes ordered by when their sign was marked seen (oldest first). */
   allCodes(): { id: string; code: string; at: number }[];
@@ -53,6 +62,11 @@ const DEFAULT_SETTINGS: Settings = { hideSeen: false, showBiz: true, showBadges:
 /** Ids of hand-entered codes with no sign in the map data. */
 export function isManualId(id: string): boolean {
   return id.startsWith("manual:");
+}
+
+/** Ids of signs the user placed on the map themselves. */
+export function isMySignId(id: string): boolean {
+  return id.startsWith("user:");
 }
 
 function readJson<T extends object>(key: string, fallback: T): T {
@@ -77,6 +91,7 @@ function writeJson(key: string, value: object): void {
 export function createStore(): Store {
   let seen = readJson<Record<string, number>>(SEEN_KEY, {});
   const codes = readJson<Record<string, string>>(CODES_KEY, {});
+  const mySigns = readJson<Record<string, LonLat>>(MY_SIGNS_KEY, {});
   let settings: Settings = { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>(SETTINGS_KEY, {}) };
   try { localStorage.setItem(VERSION_KEY, "1"); } catch {}
 
@@ -136,6 +151,28 @@ export function createStore(): Store {
       notifySeen(id, true);
       return id;
     },
+    mySigns: () => Object.entries(mySigns).map(([id, coords]) => ({ id, coords })),
+    addMySign(coords, code) {
+      const id = `user:${Date.now()}`;
+      mySigns[id] = coords;
+      seen[id] = Math.floor(Date.now() / 1000);
+      code = String(code ?? "").trim();
+      if (code) codes[id] = code;
+      writeJson(MY_SIGNS_KEY, mySigns);
+      writeJson(SEEN_KEY, seen);
+      if (code) writeJson(CODES_KEY, codes);
+      notifySeen(id, true);
+      return id;
+    },
+    removeMySign(id) {
+      delete mySigns[id];
+      delete codes[id];
+      delete seen[id];
+      writeJson(MY_SIGNS_KEY, mySigns);
+      writeJson(SEEN_KEY, seen);
+      writeJson(CODES_KEY, codes);
+      notifySeen(id, false);
+    },
     codeCount: () => Object.keys(codes).length,
     allCodes() {
       return Object.entries(codes)
@@ -156,12 +193,20 @@ export function createStore(): Store {
     },
     onSeenChange(fn) { seenSubs.add(fn); },
     onSettingsChange(fn) { settingsSubs.add(fn); },
-    exportJson: () => JSON.stringify({ v: 1, seen, codes }),
+    exportJson: () => JSON.stringify({ v: 1, seen, codes, mysigns: mySigns }),
     importJson(text) {
       const data: unknown = JSON.parse(text);
       if (!data || typeof data !== "object") throw new Error("Not a Sign Safari backup");
-      const backup = data as { seen?: unknown; codes?: unknown };
+      const backup = data as { seen?: unknown; codes?: unknown; mysigns?: unknown };
       if (!backup.seen || typeof backup.seen !== "object") throw new Error("Not a Sign Safari backup");
+      if (backup.mysigns && typeof backup.mysigns === "object") {
+        for (const [id, coords] of Object.entries(backup.mysigns as Record<string, unknown>)) {
+          if (Array.isArray(coords) && coords.length === 2 && coords.every((c) => typeof c === "number")) {
+            mySigns[id] = coords as LonLat;
+          }
+        }
+        writeJson(MY_SIGNS_KEY, mySigns);
+      }
       const incoming = backup.seen as Record<string, unknown>;
       const merged = { ...seen };
       let added = 0;

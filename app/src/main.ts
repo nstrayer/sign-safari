@@ -3,12 +3,12 @@ import "./styles.css";
 
 import { dataUrl } from "./data";
 import { el } from "./dom";
-import { createStore, type Settings } from "./store";
+import { createStore, isMySignId, type Settings } from "./store";
 import { createSignMap } from "./map";
 import { createSearch } from "./search";
 import { createUi, createWelcome, type SignIndexEntry, type Ui } from "./ui";
 import { createRoutePlanner } from "./route";
-import type { Kind, SignCollection } from "./types";
+import type { Kind, LonLat, SignCollection } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
@@ -56,6 +56,61 @@ async function main(): Promise<void> {
     onMapTap() {
       ui.closeSheet();
     },
+    onAddSignTap() {
+      startAddSign();
+    },
+  });
+
+  // Keeps the map source and the seen-list index in step with the
+  // user-placed signs in the store.
+  function syncMySigns(): void {
+    const mine = store.mySigns();
+    for (const id of signIndexById.keys()) {
+      if (isMySignId(id) && !mine.some((s) => s.id === id)) signIndexById.delete(id);
+    }
+    for (const s of mine) {
+      signIndexById.set(s.id, { label: "Added by you", kind: "sign", coords: s.coords, props: { id: s.id } });
+    }
+    signMap.setMySigns(mine);
+  }
+
+  // "Add a missing sign": geolocate (fall back to the map center), then let
+  // the user fine-tune a draggable pin before committing.
+  const pinBar = el("pinBar");
+
+  function startAddSign(): void {
+    if (!pinBar.hidden) return;
+    const begin = (coords: LonLat): void => {
+      signMap.flyTo(coords, 17);
+      signMap.showPin(coords);
+      pinBar.hidden = false;
+    };
+    if (!navigator.geolocation) {
+      begin(signMap.center());
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const here: LonLat = [pos.coords.longitude, pos.coords.latitude];
+        begin(signMap.inBounds(here) ? here : signMap.center());
+      },
+      () => begin(signMap.center()),
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
+  }
+
+  function endPlacement(): void {
+    pinBar.hidden = true;
+    signMap.hidePin();
+  }
+
+  el("pinCancel").addEventListener("click", endPlacement);
+  el("pinConfirm").addEventListener("click", () => {
+    const coords = signMap.pinPosition();
+    const id = store.addMySign(coords);
+    endPlacement();
+    ui.openSheet({ id, kind: "sign", props: { id }, coords });
+    ui.showToast("Sign added - type in its code word!");
   });
 
   ui = createUi({
@@ -66,6 +121,7 @@ async function main(): Promise<void> {
     welcome,
   });
   ui.setDataStamp(signs.generated);
+  syncMySigns(); // index entries only; the map source fills in on load
 
   const searchBox = document.querySelector<HTMLElement>(".search-box");
   if (!searchBox) throw new Error("Missing .search-box");
@@ -94,6 +150,7 @@ async function main(): Promise<void> {
     for (const b of viewBtns) b.classList.toggle("is-active", b.dataset.view === view);
     if (view === "route") {
       ui.closeSheet();
+      endPlacement();
       routePlanner.show();
     } else {
       routePlanner.hide();
@@ -106,6 +163,7 @@ async function main(): Promise<void> {
   signMap.onLoad(() => {
     signMap.addLayers({ signs, biz, badges });
     signMap.applySeen(store.seenIds());
+    syncMySigns();
 
     const applySettings = (s: Settings): void => {
       signMap.setLayerVisible("biz-pts", s.showBiz);
@@ -116,6 +174,7 @@ async function main(): Promise<void> {
     store.onSettingsChange(applySettings);
 
     store.onSeenChange((id, isSeen) => {
+      if (isMySignId(id)) syncMySigns();
       signMap.setSeen(id, isSeen);
       if (store.settings().hideSeen) signMap.setHideSeen(true, store.seenIds());
     });

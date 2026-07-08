@@ -135,8 +135,18 @@
         <button class="flex-none cursor-pointer rounded-full border-none bg-navy px-5 font-display text-sm font-bold text-white active:scale-[0.96]" id="codeSave">Save</button>
       </div>
       <button class="w-full cursor-pointer rounded-full border-none bg-coral p-[15px] font-display text-[17px] font-bold text-white shadow-[0_4px_14px_rgba(232,112,74,0.45)] [transition:scale_0.12s_ease,background_0.2s_ease,box-shadow_0.2s_ease] active:scale-[0.97] seen:bg-green seen:shadow-[0_4px_14px_rgba(67,168,96,0.4)]" id="seenBtn">Mark as seen</button>
+      <button class="w-full cursor-pointer rounded-full border-[2.5px] border-coral bg-white p-3 font-display text-[15px] font-bold text-coral active:bg-coral active:text-white" id="deleteSignBtn" hidden>Remove this sign</button>
     </div>
   </section>
+
+  <!-- Add-a-missing-sign placement bar -->
+  <div class="fixed bottom-[calc(18px+env(safe-area-inset-bottom))] left-1/2 z-30 w-[min(380px,calc(100vw-24px))] -translate-x-1/2 rounded-card bg-white p-3.5 shadow-card" id="pinBar" hidden>
+    <p class="mb-2.5 text-sm leading-[1.4] font-semibold text-ink">Drag the pin onto the sign's spot, then add it.</p>
+    <div class="flex gap-2.5">
+      <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="pinCancel">Cancel</button>
+      <button class="flex-1 cursor-pointer rounded-full border-none bg-coral p-2.5 font-display text-[14px] font-bold text-white active:scale-[0.97]" id="pinConfirm">Add sign</button>
+    </div>
+  </div>
 
   <!-- Progress panel -->
   <section class="fixed inset-0 z-50 flex flex-col bg-cream pt-[env(safe-area-inset-top)] desk:inset-[auto_12px_12px_auto] desk:top-[calc(10px+env(safe-area-inset-top))] desk:w-[400px] desk:overflow-hidden desk:rounded-[22px] desk:shadow-card" id="progressPanel" role="dialog" aria-modal="true" aria-label="Your progress" hidden>

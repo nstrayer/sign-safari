@@ -1,7 +1,7 @@
 // UI: detail bottom sheet, progress pill + panel, toasts.
 
 import { el } from "./dom";
-import { isManualId } from "./store";
+import { isManualId, isMySignId } from "./store";
 import type { Store } from "./store";
 import type { Kind, LonLat, SignProps, TappedFeature } from "./types";
 
@@ -87,6 +87,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     codeInput: el<HTMLInputElement>("codeInput"),
     codeSave: el("codeSave"),
     seenBtn: el("seenBtn"),
+    deleteSignBtn: el("deleteSignBtn"),
     copyCodesBtn: el("copyCodesBtn"),
     codesNote: el("codesNote"),
     extraCodeInput: el<HTMLInputElement>("extraCodeInput"),
@@ -169,6 +170,16 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
       remove.setAttribute("aria-label", `Remove ${labelText}`);
       remove.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (isMySignId(id)) {
+          const coords = item?.coords;
+          store.removeMySign(id);
+          renderCopyCodesBtn();
+          showToast("Sign removed.", () => {
+            if (coords) store.addMySign(coords, code);
+            renderCopyCodesBtn();
+          });
+          return;
+        }
         if (code) store.setCode(id, "");
         store.toggle(id);
         renderCopyCodesBtn();
@@ -197,13 +208,15 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
   function openSheet(feature: TappedFeature): void {
     current = feature;
     const { kind, props } = feature;
-    els.kind.textContent = KIND_LABELS[kind] ?? "Sign";
-    els.kind.className = `${KIND_CHIP_BASE} ${KIND_CHIP_COLORS[kind] ?? KIND_CHIP_COLORS.sign}`;
-    els.addr.textContent = props.addr ?? props.label ?? "Mystery spot";
-    els.sub.textContent = [props.city, props.zip].filter(Boolean).join(", ");
+    const mine = isMySignId(feature.id);
+    els.kind.textContent = mine ? "Added by you" : KIND_LABELS[kind] ?? "Sign";
+    els.kind.className = `${KIND_CHIP_BASE} ${mine ? "bg-coral text-white" : KIND_CHIP_COLORS[kind] ?? KIND_CHIP_COLORS.sign}`;
+    els.addr.textContent = mine ? "Your added sign" : props.addr ?? props.label ?? "Mystery spot";
+    els.sub.textContent = mine ? "Not in the official sign data" : [props.city, props.zip].filter(Boolean).join(", ");
     const reds = Number(props.reds ?? 0);
-    els.stat.textContent = kind === "badge" ? "" : reds > 0 ? `Redeemed ${reds.toLocaleString()} times` : "Not redeemed yet - be the first!";
-    els.seenBtn.hidden = kind === "badge";
+    els.stat.textContent = kind === "badge" || mine ? "" : reds > 0 ? `Redeemed ${reds.toLocaleString()} times` : "Not redeemed yet - be the first!";
+    els.seenBtn.hidden = kind === "badge" || mine;
+    els.deleteSignBtn.hidden = !mine;
     els.codeRow.hidden = kind === "badge";
     els.codeInput.value = store.getCode(feature.id);
     renderSeenBtn();
@@ -240,6 +253,19 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     showToast(nowSeen ? `Nice! ${n.toLocaleString()} spotted.` : "Unmarked.", () => {
       store.toggle(id);
       renderSeenBtn();
+    });
+  });
+
+  els.deleteSignBtn.addEventListener("click", () => {
+    if (!current) return;
+    const { id, coords } = current;
+    const code = store.getCode(id);
+    store.removeMySign(id);
+    closeSheet();
+    renderCopyCodesBtn();
+    showToast("Sign removed.", () => {
+      store.addMySign(coords, code);
+      renderCopyCodesBtn();
     });
   });
 
