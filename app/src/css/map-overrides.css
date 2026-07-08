@@ -1,7 +1,15 @@
 /* ---------- MapLibre control restyling ---------- */
 
+/* Below desk width the address bar is full-width under the header
+   (#searchWrap top 122px + ~42px bar); keep controls clear of it. */
 .maplibregl-ctrl-top-right {
-  top: calc(150px + env(safe-area-inset-top));
+  top: calc(176px + env(safe-area-inset-top));
+}
+
+@media (min-width: 900px) {
+  .maplibregl-ctrl-top-right {
+    top: calc(150px + env(safe-area-inset-top));
+  }
 }
 
 .maplibregl-ctrl-group {
@@ -16,6 +24,17 @@
 }
 
 .maplibregl-ctrl-group button + button { border-top: 1px solid #eeecf5 !important; }
+
+/* MapLibre defaults inset bottom-right controls by 10px; compact attrib adds
+   another 10px margin. Flush to the map corner (respecting safe area). */
+.maplibregl-ctrl-bottom-right {
+  right: env(safe-area-inset-right);
+  bottom: env(safe-area-inset-bottom);
+}
+
+.maplibregl-ctrl-bottom-right > .maplibregl-ctrl-attrib {
+  margin: 0 !important;
+}
 
 .maplibregl-ctrl-attrib {
   border-radius: 10px 0 0 0 !important;
