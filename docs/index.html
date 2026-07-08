@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-jCSMExRM.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-CaFR2gIy.css">
+  <script type="module" crossorigin src="./assets/index-BbqxaxBS.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CrDwYnQL.css">
 </head>
 <body>
   <div class="fixed inset-0 h-dvh bg-[#eef0f4]" id="map" aria-label="Map of Summer Game signs"></div>
@@ -32,6 +32,11 @@
           <button class="size-[19px] flex-none cursor-pointer rounded-full border-[1.5px] border-white/45 bg-transparent p-0 font-display text-xs leading-none font-bold text-white/75 active:bg-white/18" id="infoBtn" aria-label="How does this app work?">?</button>
         </div>
         <p class="mt-0.5 mb-0 text-[11.5px] font-bold tracking-[0.4px] text-gold uppercase">Summer Game 2026 &middot; Ann Arbor</p>
+        <!-- .view-btn is a JS hook (main.ts); this one switch serves both views. -->
+        <nav class="mt-2 flex w-fit rounded-full bg-white/12 p-[3px]" aria-label="View">
+          <button class="view-btn is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3.5 py-1 font-display text-[12px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
+          <button class="view-btn cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3.5 py-1 font-display text-[12px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="route">Route</button>
+        </nav>
       </div>
     </div>
     <button class="pointer-events-auto flex cursor-pointer flex-col items-stretch gap-[5px] rounded-full border-none bg-white px-[18px] pt-2.5 pb-[11px] font-display text-navy shadow-card transition-transform duration-150 ease-[ease] active:scale-[0.96]" id="progressPill" aria-haspopup="dialog" aria-label="Open your progress">
@@ -43,23 +48,15 @@
     </button>
   </header>
 
-  <!-- .view-btn stays as a JS hook (main.ts). On phones the route drawer's own
-       Map button replaces this switch, hence hidden in route mode there. -->
-  <nav class="fixed bottom-[calc(14px+env(safe-area-inset-bottom))] left-1/2 z-32 flex -translate-x-1/2 rounded-full bg-navy p-1 shadow-card max-wide:in-[.route-mode]:hidden" aria-label="View">
-    <button class="view-btn is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-5 py-2 font-display text-[14px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
-    <button class="view-btn cursor-pointer appearance-none rounded-full border-0 bg-transparent px-5 py-2 font-display text-[14px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="route">Route</button>
-  </nav>
-
   <!-- Route planner view -->
   <section class="fixed inset-0 z-20 h-dvh bg-cream" id="routeView" hidden aria-label="Route planner">
     <canvas class="absolute inset-0 h-full w-full cursor-grab touch-none" id="routeCanvas"></canvas>
-    <div class="pointer-events-none absolute top-[calc(86px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a sign to start a route</div>
+    <div class="pointer-events-none absolute top-[calc(122px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a sign to start a route</div>
     <div class="route-drawer" id="routeDrawer">
       <div class="drawer-bar" id="drawerBar" role="button" tabindex="0" aria-expanded="true" aria-controls="drawerBody">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="mt-1 flex items-center gap-2.5">
           <span class="min-w-0 flex-1 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy" id="drawerTitle">Plan a sign run</span>
-          <button class="view-btn flex-none cursor-pointer appearance-none rounded-full border-0 bg-navy px-4 py-[7px] font-display text-[13px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
           <svg class="drawer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5l6-6 6 6" /></svg>
         </div>
       </div>
@@ -100,8 +97,12 @@
           <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold"><input class="accent-green" type="checkbox" id="loopBack" /><span>Loop back to start</span></label>
         </div>
         <p class="m-0 font-display text-[15px] leading-[1.3] font-extrabold text-navy max-wide:hidden" id="routeSummary" hidden></p>
-        <div class="flex gap-2" id="routeActions" hidden>
-          <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="exportGpx">Export GPX for your watch</button>
+        <div class="flex items-center justify-between gap-2" id="routeActions" hidden>
+          <button class="cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] leading-[1.2] font-bold text-peri" id="stopsToggle" aria-controls="routeStops" aria-expanded="false">Show stops</button>
+          <div class="flex gap-2">
+            <button class="cursor-pointer rounded-full border-[1.5px] border-navy bg-white px-3 py-1 font-display text-[12px] leading-[1.4] font-bold text-navy active:bg-navy active:text-white" id="shareRoute" title="Copy a link to this route">Share</button>
+            <button class="cursor-pointer rounded-full border-[1.5px] border-navy bg-white px-3 py-1 font-display text-[12px] leading-[1.4] font-bold text-navy active:bg-navy active:text-white" id="exportGpx" title="Export GPX for your watch">Export GPX</button>
+          </div>
         </div>
         <ol class="route-stops" id="routeStops" hidden></ol>
       </div>
@@ -110,7 +111,7 @@
     <div class="absolute inset-0 grid place-items-center bg-cream p-6 text-center font-body text-[15px] leading-[1.4] font-bold text-navy" id="routeLoading">Loading street network...</div>
   </section>
 
-  <div class="fixed top-[calc(86px+env(safe-area-inset-top))] left-3 z-25 w-[min(420px,calc(100vw-24px))] desk:top-[calc(96px+env(safe-area-inset-top))]" id="searchWrap">
+  <div class="fixed top-[calc(122px+env(safe-area-inset-top))] left-3 z-25 w-[min(420px,calc(100vw-24px))] desk:top-[calc(132px+env(safe-area-inset-top))]" id="searchWrap">
     <!-- .search-box is a JS hook (main.ts) and the has-text ancestor for the
          clear button; 16px on the input prevents iOS zoom-on-focus. -->
     <div class="search-box flex items-center gap-2 rounded-full bg-white py-1 pr-2 pl-4 shadow-card">
@@ -205,7 +206,7 @@
   </section>
 
   <!-- Toast sits below the header/search so it never covers the sheet's action button. -->
-  <div class="pointer-events-none fixed top-[calc(146px+env(safe-area-inset-top))] left-1/2 z-60 flex max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-2 items-center gap-3.5 rounded-full bg-navy px-5 py-3 font-display text-[14.5px] font-bold text-white opacity-0 shadow-card transition-[opacity,translate] duration-[250ms] ease-[ease] shown:pointer-events-auto shown:translate-y-0 shown:opacity-100 desk:top-5" id="toast" hidden>
+  <div class="pointer-events-none fixed top-[calc(182px+env(safe-area-inset-top))] left-1/2 z-60 flex max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-2 items-center gap-3.5 rounded-full bg-navy px-5 py-3 font-display text-[14.5px] font-bold text-white opacity-0 shadow-card transition-[opacity,translate] duration-[250ms] ease-[ease] shown:pointer-events-auto shown:translate-y-0 shown:opacity-100 desk:top-5" id="toast" hidden>
     <span id="toastMsg"></span>
     <button id="toastUndo" class="cursor-pointer border-none bg-transparent p-0 font-display text-[14.5px] font-extrabold text-gold" hidden>Undo</button>
   </div>
