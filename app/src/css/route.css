@@ -112,13 +112,13 @@ body.route-mode #searchWrap { display: none; }
   .route-drawer:not(.open) .drawer-body { max-height: 0; }
 }
 
-/* Wide screens: back to the docked card; the bar (and its Map button) is
-   redundant next to the floating view switch. */
+/* Wide screens: back to the docked card; the bar is redundant next to the
+   header's view switch. */
 @media (min-width: 720px) {
   .route-drawer {
     left: auto;
     right: 12px;
-    bottom: calc(68px + env(safe-area-inset-bottom));
+    bottom: calc(12px + env(safe-area-inset-bottom));
     width: 380px;
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);

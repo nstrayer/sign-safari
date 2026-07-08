@@ -421,10 +421,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }
   const drawerOpen = () => els.drawer.classList.contains("open");
 
-  els.drawerBar.addEventListener("click", (e) => {
-    if (e.target instanceof Element && e.target.closest(".drawer-map-btn")) return;
-    setDrawer(!drawerOpen());
-  });
+  els.drawerBar.addEventListener("click", () => setDrawer(!drawerOpen()));
   els.drawerBar.addEventListener("keydown", (e) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
@@ -554,7 +551,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     // On phones the drawer collapses to its bar along the bottom; on wide
     // screens the card sits on the right. Frame the route in what's left.
     const wide = matchMedia("(min-width: 720px)").matches;
-    const headerPx = 100;
+    const headerPx = 136; // title card incl. the view switch pill
     const availW = wide ? w - 420 : w;
     // The drawer stays open during builds now, so measure however much of
     // it is actually showing (collapsed bar or open controls).
