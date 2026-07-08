@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-B6FlV7Ao.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-ZS9w1Uy4.css">
+  <script type="module" crossorigin src="./assets/index-jCSMExRM.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-CaFR2gIy.css">
 </head>
 <body>
   <div class="fixed inset-0 h-dvh bg-[#eef0f4]" id="map" aria-label="Map of Summer Game signs"></div>
@@ -43,50 +43,52 @@
     </button>
   </header>
 
-  <nav class="view-switch" aria-label="View">
-    <button class="view-btn is-active" data-view="map">Map</button>
-    <button class="view-btn" data-view="route">Route</button>
+  <!-- .view-btn stays as a JS hook (main.ts). On phones the route drawer's own
+       Map button replaces this switch, hence hidden in route mode there. -->
+  <nav class="fixed bottom-[calc(14px+env(safe-area-inset-bottom))] left-1/2 z-32 flex -translate-x-1/2 rounded-full bg-navy p-1 shadow-card max-wide:in-[.route-mode]:hidden" aria-label="View">
+    <button class="view-btn is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-5 py-2 font-display text-[14px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
+    <button class="view-btn cursor-pointer appearance-none rounded-full border-0 bg-transparent px-5 py-2 font-display text-[14px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="route">Route</button>
   </nav>
 
   <!-- Route planner view -->
-  <section class="route-view" id="routeView" hidden aria-label="Route planner">
-    <canvas id="routeCanvas"></canvas>
-    <div class="route-hint" id="routeHint">Tap a sign to start a route</div>
+  <section class="fixed inset-0 z-20 h-dvh bg-cream" id="routeView" hidden aria-label="Route planner">
+    <canvas class="absolute inset-0 h-full w-full cursor-grab touch-none" id="routeCanvas"></canvas>
+    <div class="pointer-events-none absolute top-[calc(86px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a sign to start a route</div>
     <div class="route-drawer" id="routeDrawer">
       <div class="drawer-bar" id="drawerBar" role="button" tabindex="0" aria-expanded="true" aria-controls="drawerBody">
         <div class="sheet-handle" aria-hidden="true"></div>
-        <div class="drawer-bar-row">
-          <span class="drawer-title" id="drawerTitle">Plan a sign run</span>
-          <button class="view-btn drawer-map-btn" data-view="map">Map</button>
+        <div class="mt-1 flex items-center gap-2.5">
+          <span class="min-w-0 flex-1 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy" id="drawerTitle">Plan a sign run</span>
+          <button class="view-btn flex-none cursor-pointer appearance-none rounded-full border-0 bg-navy px-4 py-[7px] font-display text-[13px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
           <svg class="drawer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5l6-6 6 6" /></svg>
         </div>
       </div>
       <div class="drawer-body" id="drawerBody">
-      <div class="route-step" id="stepIntro" hidden>
-        <h3 class="step-title">Plan a sign run</h3>
+      <div class="flex min-h-0 flex-col gap-2.5 max-wide:mb-2.5" id="stepIntro" hidden>
+        <h3 class="m-0 font-display text-[18px] leading-[1.2] font-extrabold text-navy max-wide:hidden">Plan a sign run</h3>
         <p class="text-[13.5px] leading-[1.45]">Pick a starting point and a budget - how far you feel like walking, or how many signs you're after - and this builds the shortest route through them along real streets. Seen signs are skipped so every stop is a new code word.</p>
-        <button class="cta-btn" id="introGo">Pick a starting point</button>
+        <button class="cursor-pointer appearance-none rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60" id="introGo">Pick a starting point</button>
       </div>
 
-      <div class="route-step" id="stepStart" hidden>
-        <h3 class="step-title">Where are you starting?</h3>
-        <button class="cta-btn" id="useLocation">Use my location</button>
-        <div class="addr-box relative">
-          <input id="addrInput" type="search" placeholder="...or type an address" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search a starting address" />
-          <ul class="addr-results" id="addrResults" hidden></ul>
+      <div class="flex min-h-0 flex-col gap-2.5 max-wide:mb-2.5" id="stepStart" hidden>
+        <h3 class="m-0 font-display text-[18px] leading-[1.2] font-extrabold text-navy max-wide:hidden">Where are you starting?</h3>
+        <button class="cursor-pointer appearance-none rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60" id="useLocation">Use my location</button>
+        <div class="relative">
+          <input class="w-full rounded-xl border-2 border-[#e3e4ee] px-3 py-2.5 font-body text-[14px] leading-[1.2] font-normal text-ink outline-none focus:border-peri" id="addrInput" type="search" placeholder="...or type an address" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search a starting address" />
+          <ul class="mt-1 max-h-[180px] list-none overflow-y-auto rounded-xl border border-[#e3e4ee] bg-white p-1 shadow-card" id="addrResults" hidden></ul>
         </div>
         <p class="text-[13.5px] leading-[1.45] text-[#6b6d8f]">...or tap any sign dot on the map above.</p>
       </div>
 
-      <div class="route-step" id="stepPlan" hidden>
+      <div class="flex min-h-0 flex-col gap-2.5 max-wide:mb-2.5" id="stepPlan" hidden>
         <div class="flex items-baseline justify-between gap-2.5">
           <span class="truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy" id="seedLabel"></span>
           <button class="flex-none cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] leading-[1.2] font-bold text-peri" id="changeStart">change</button>
         </div>
         <div class="flex items-center justify-between gap-2.5">
-          <div class="mode-toggle" role="group" aria-label="Route budget type">
-            <button class="mode-btn is-active" id="modeDistance">Distance</button>
-            <button class="mode-btn" id="modeCount">Sign count</button>
+          <div class="flex rounded-full bg-[#eef0f4] p-[3px]" role="group" aria-label="Route budget type">
+            <button class="is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3 py-1.5 font-body text-[13px] leading-[1.2] font-bold text-ink selected:bg-navy selected:text-cream" id="modeDistance">Distance</button>
+            <button class="cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3 py-1.5 font-body text-[13px] leading-[1.2] font-bold text-ink selected:bg-navy selected:text-cream" id="modeCount">Sign count</button>
           </div>
         </div>
         <div class="flex items-center justify-between gap-2.5">
@@ -97,7 +99,7 @@
           <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold"><input class="accent-green" type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
           <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold"><input class="accent-green" type="checkbox" id="loopBack" /><span>Loop back to start</span></label>
         </div>
-        <p class="route-summary" id="routeSummary" hidden></p>
+        <p class="m-0 font-display text-[15px] leading-[1.3] font-extrabold text-navy max-wide:hidden" id="routeSummary" hidden></p>
         <div class="flex gap-2" id="routeActions" hidden>
           <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="exportGpx">Export GPX for your watch</button>
         </div>
@@ -105,7 +107,7 @@
       </div>
       </div>
     </div>
-    <div class="route-loading" id="routeLoading">Loading street network...</div>
+    <div class="absolute inset-0 grid place-items-center bg-cream p-6 text-center font-body text-[15px] leading-[1.4] font-bold text-navy" id="routeLoading">Loading street network...</div>
   </section>
 
   <div class="fixed top-[calc(86px+env(safe-area-inset-top))] left-3 z-25 w-[min(420px,calc(100vw-24px))] desk:top-[calc(96px+env(safe-area-inset-top))]" id="searchWrap">

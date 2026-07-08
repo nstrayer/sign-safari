@@ -1,3 +1,13 @@
+/* Retained hand CSS. What stays here (everything else is Tailwind utilities
+   in the markup):
+   - html/body foundations
+   - the detail sheet shell: its open-state transform and the desktop
+     breakpoint override conflict as same-specificity variant utilities, so
+     the cascade is easier to reason about in one place
+   - the sheet handle, shared with the route drawer bar, whose offsetHeight
+     is measured by JS (see route.css)
+   - the toggle switch, a pseudo-element widget */
+
 html, body {
   margin: 0;
   padding: 0;
@@ -73,8 +83,6 @@ html, body {
 .toggle-row input:checked { background: var(--color-green); }
 .toggle-row input:checked::after { left: 21px; }
 
-/* ---------- Welcome modal ---------- */
-
 /* ---------- Desktop layout ---------- */
 
 @media (min-width: 900px) {
@@ -87,6 +95,4 @@ html, body {
     padding-bottom: 10px;
     transform: translateY(calc(100% + 24px));
   }
-
 }
-

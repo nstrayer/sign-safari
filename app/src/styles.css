@@ -3,8 +3,10 @@
    paint splat, golden halftone dots, play.aadl.org angled color bars.
 
    Tailwind v4 entry. Brand tokens live in @theme (emitting utilities like
-   bg-navy / font-display / shadow-card). Retained hand CSS is imported into
-   the components layer so markup utilities can still override it; the
+   bg-navy / font-display / shadow-card). Nearly all styling is utilities in
+   the markup; the hand CSS retained in css/ (sheet/drawer shells, toggle
+   switch, stop counters, spinner - see each file's header) is imported into
+   the components layer so markup utilities can still override it. The
    MapLibre overrides stay unlayered on purpose (third-party DOM, !important
    cascade already reasoned about there). */
 

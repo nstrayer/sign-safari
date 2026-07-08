@@ -813,10 +813,11 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.addrResults.innerHTML = "";
     for (const item of items) {
       const li = document.createElement("li");
+      li.className = "cursor-pointer rounded-lg px-2.5 py-2 font-body text-[13.5px] leading-[1.3] font-bold hover:bg-[#f2f3fa]";
       li.textContent = item.label;
       if (item.sub) {
         const sub = document.createElement("span");
-        sub.className = "result-sub";
+        sub.className = "block text-[12px] font-normal text-[#6b6d8f]";
         sub.textContent = item.sub;
         li.appendChild(sub);
       }

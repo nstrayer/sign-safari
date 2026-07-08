@@ -1,69 +1,10 @@
-/* ---------- Route planner ---------- */
-
-.view-switch {
-  position: fixed;
-  bottom: calc(14px + env(safe-area-inset-bottom));
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 32;
-  display: flex;
-  background: var(--color-navy);
-  border-radius: 999px;
-  padding: 4px;
-  box-shadow: var(--shadow-card);
-}
-
-.view-btn {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--color-cream);
-  font: 700 14px/1.2 var(--font-display);
-  padding: 8px 20px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.view-btn.is-active {
-  background: var(--color-gold);
-  color: var(--color-navy);
-}
-
-.route-view {
-  position: fixed;
-  inset: 0;
-  height: 100dvh;
-  z-index: 20;
-  background: var(--color-cream);
-}
-
-#routeCanvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  cursor: grab;
-}
-
-.route-hint {
-  position: absolute;
-  top: calc(86px + env(safe-area-inset-top));
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: min(86vw, 420px);
-  background: #fff;
-  color: var(--color-ink);
-  font: 700 13px/1.3 var(--font-body);
-  padding: 8px 14px;
-  border-radius: 999px;
-  box-shadow: var(--shadow-card);
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  pointer-events: none;
-}
+/* ---------- Route planner: retained hand CSS ----------
+   What stays here (everything else is Tailwind utilities in the markup):
+   - the drawer shell: its collapsed height is measured by JS (fitToNodes),
+     and its open-state / breakpoint transform interplay is easier to reason
+     about in one place than as competing variant utilities
+   - the numbered stop list (CSS counters) and the building spinner
+   - rules keyed off body.route-mode, an ancestor state class */
 
 /* Bottom drawer (mobile): always-visible bar + collapsible body. On wide
    screens (min-width: 720px below) it turns back into a card docked right. */
@@ -90,30 +31,6 @@
    drawer's true collapsed height (fitToNodes measures it). */
 .drawer-bar .sheet-handle { margin: 0 auto 2px; }
 
-.drawer-bar-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-}
-
-.drawer-title {
-  flex: 1;
-  min-width: 0;
-  font: 800 15px/1.3 var(--font-display);
-  color: var(--color-navy);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.drawer-map-btn {
-  flex: none;
-  background: var(--color-navy);
-  padding: 7px 16px;
-  font-size: 13px;
-}
-
 .drawer-chevron {
   flex: none;
   width: 18px;
@@ -136,35 +53,6 @@
   padding: 0 16px;
   max-height: 62dvh;
   transition: max-height 0.3s ease;
-}
-
-.mode-toggle {
-  display: flex;
-  background: #eef0f4;
-  border-radius: 999px;
-  padding: 3px;
-}
-
-.mode-btn {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--color-ink);
-  font: 700 13px/1.2 var(--font-body);
-  padding: 6px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.mode-btn.is-active {
-  background: var(--color-navy);
-  color: var(--color-cream);
-}
-
-.route-summary {
-  margin: 0;
-  font: 800 15px/1.3 var(--font-display);
-  color: var(--color-navy);
 }
 
 .route-stops {
@@ -203,29 +91,25 @@
 
 .route-stops li.stop-seen { color: var(--color-green); }
 
-.route-loading {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  background: var(--color-cream);
-  font: 700 15px/1.4 var(--font-body);
+.route-stops li.stop-start {
+  counter-increment: none;
+  font-weight: 700;
   color: var(--color-navy);
-  padding: 24px;
-  text-align: center;
 }
+
+.route-stops li.stop-start::before {
+  content: "S";
+  background: var(--color-gold);
+  color: var(--color-navy);
+}
+
+.route-stops li.stop-start:last-child::before { content: "F"; }
 
 body.route-mode #searchWrap { display: none; }
 
-/* Narrow screens: drawer collapses to just the bar; the map is the star.
-   The floating view switch and hint pill fold into the drawer bar. */
+/* Narrow screens: drawer collapses to just the bar; the map is the star. */
 @media (max-width: 719.98px) {
   .route-drawer:not(.open) .drawer-body { max-height: 0; }
-  .route-hint { display: none; }
-  body.route-mode .view-switch { display: none; }
-  .drawer-body .step-title { display: none; }
-  #stepPlan .route-summary { display: none; }
-  .route-step { margin-bottom: 10px; }
 }
 
 /* Wide screens: back to the docked card; the bar (and its Map button) is
@@ -248,90 +132,9 @@ body.route-mode #searchWrap { display: none; }
   }
 }
 
-/* Route planner wizard steps */
-
-.route-step {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 0;
-}
-
-.step-title {
-  margin: 0;
-  font: 800 18px/1.2 var(--font-display);
-  color: var(--color-navy);
-}
-
-.cta-btn {
-  appearance: none;
-  border: 0;
-  background: var(--color-coral);
-  color: #fff;
-  font: 700 15px/1.2 var(--font-display);
-  padding: 12px 16px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-
-.cta-btn:disabled { opacity: 0.6; }
-
-.addr-box input {
-  width: 100%;
-  border: 2px solid #e3e4ee;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font: 400 14px/1.2 var(--font-body);
-  color: var(--color-ink);
-  outline: none;
-}
-
-.addr-box input:focus { border-color: var(--color-peri); }
-
-.addr-results {
-  margin: 4px 0 0;
-  padding: 4px;
-  list-style: none;
-  background: #fff;
-  border: 1px solid #e3e4ee;
-  border-radius: 12px;
-  max-height: 180px;
-  overflow-y: auto;
-  box-shadow: var(--shadow-card);
-}
-
-.addr-results li {
-  padding: 8px 10px;
-  border-radius: 8px;
-  font: 700 13.5px/1.3 var(--font-body);
-  cursor: pointer;
-}
-
-.addr-results li:hover { background: #f2f3fa; }
-
-.addr-results .result-sub {
-  display: block;
-  font-weight: 400;
-  font-size: 12px;
-  color: #6b6d8f;
-}
-
-.route-stops li.stop-start {
-  counter-increment: none;
-  font-weight: 700;
-  color: var(--color-navy);
-}
-
-.route-stops li.stop-start::before {
-  content: "S";
-  background: var(--color-gold);
-  color: var(--color-navy);
-}
-
-.route-stops li.stop-start:last-child::before { content: "F"; }
-
-.route-summary.building::after,
-.drawer-title.building::after {
+/* Route-building spinner, toggled via .building on the summary and drawer
+   title. */
+.building::after {
   content: "";
   display: inline-block;
   width: 11px;
