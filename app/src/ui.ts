@@ -136,9 +136,10 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
       li.className = "mb-2 flex cursor-pointer items-center gap-2.5 rounded-[14px] bg-white px-3.5 py-2.5 text-[14.5px] font-semibold shadow-[0_2px_8px_rgba(38,40,72,0.06)]";
       const dot = document.createElement("span");
       dot.className = "size-2.5 flex-none rounded-full bg-green";
+      const labelText = item ? item.label : isManualId(id) ? "Added by hand" : `Sign ${id}`;
       const label = document.createElement("span");
       label.className = "min-w-0 flex-1 wrap-anywhere";
-      label.textContent = item ? item.label : isManualId(id) ? "Added by hand" : `Sign ${id}`;
+      label.textContent = labelText;
       const when = document.createElement("span");
       when.className = "ml-auto flex-none text-[12px] font-bold text-[#a09dba]";
       when.textContent = fmtWhen(at);
@@ -160,7 +161,27 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
         });
         label.appendChild(chip);
       }
-      li.append(dot, label, when);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "flex size-[26px] flex-none cursor-pointer items-center justify-center rounded-full border-none bg-cream text-[17px] leading-none text-[#8c88a0] active:bg-coral active:text-white";
+      remove.textContent = "\u00d7";
+      remove.title = "Remove from list";
+      remove.setAttribute("aria-label", `Remove ${labelText}`);
+      remove.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (code) store.setCode(id, "");
+        store.toggle(id);
+        renderCopyCodesBtn();
+        showToast(isManualId(id) ? "Code removed." : "Unmarked.", () => {
+          if (isManualId(id)) store.addManualCode(code);
+          else {
+            store.toggle(id);
+            if (code) store.setCode(id, code);
+          }
+          renderCopyCodesBtn();
+        });
+      });
+      li.append(dot, label, when, remove);
       if (item) {
         li.addEventListener("click", () => {
           closePanel();
