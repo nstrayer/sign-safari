@@ -7,13 +7,6 @@ html, body {
   overscroll-behavior: none;
 }
 
-#map {
-  position: fixed;
-  inset: 0;
-  height: 100dvh;
-  background: #eef0f4;
-}
-
 /* ---------- Detail sheet ---------- */
 
 .sheet {
@@ -82,38 +75,6 @@ html, body {
 
 /* ---------- Welcome modal ---------- */
 
-/* ---------- Toast ---------- */
-
-/* Sits below the header/search so it never covers the sheet's action button. */
-.toast {
-  position: fixed;
-  left: 50%;
-  top: calc(146px + env(safe-area-inset-top));
-  transform: translateX(-50%) translateY(-8px);
-  z-index: 60;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  background: var(--color-navy);
-  color: #fff;
-  font-family: var(--font-display);
-  font-size: 14.5px;
-  font-weight: 700;
-  border-radius: 999px;
-  padding: 12px 20px;
-  box-shadow: var(--shadow-card);
-  opacity: 0;
-  transition: opacity 0.25s ease, transform 0.25s ease;
-  pointer-events: none;
-  max-width: calc(100vw - 32px);
-}
-
-.toast.show {
-  opacity: 1;
-  transform: translateX(-50%) translateY(0);
-  pointer-events: auto;
-}
-
 /* ---------- Desktop layout ---------- */
 
 @media (min-width: 900px) {
@@ -127,6 +88,5 @@ html, body {
     transform: translateY(calc(100% + 24px));
   }
 
-  .toast { top: 20px; }
 }
 

@@ -17,7 +17,7 @@
        ordering and cache-busting via hashed asset names. -->
 </head>
 <body>
-  <div id="map" aria-label="Map of Summer Game signs"></div>
+  <div class="fixed inset-0 h-dvh bg-[#eef0f4]" id="map" aria-label="Map of Summer Game signs"></div>
 
   <header class="pointer-events-none fixed top-[calc(10px+env(safe-area-inset-top))] right-3 left-3 z-30 flex items-start justify-between gap-2.5">
     <div class="pointer-events-auto relative overflow-hidden rounded-card bg-navy bg-halftone pt-2.5 pr-[18px] pb-3 pl-4 shadow-card">
@@ -200,7 +200,8 @@
     <button class="w-full cursor-pointer rounded-full border-none bg-coral p-3.5 font-display text-base font-bold text-white shadow-[0_4px_14px_rgba(232,112,74,0.45)] transition-transform duration-[120ms] active:scale-[0.97]" id="welcomeGo">Start exploring</button>
   </section>
 
-  <div class="toast" id="toast" hidden>
+  <!-- Toast sits below the header/search so it never covers the sheet's action button. -->
+  <div class="pointer-events-none fixed top-[calc(146px+env(safe-area-inset-top))] left-1/2 z-60 flex max-w-[calc(100vw-32px)] -translate-x-1/2 -translate-y-2 items-center gap-3.5 rounded-full bg-navy px-5 py-3 font-display text-[14.5px] font-bold text-white opacity-0 shadow-card transition-[opacity,translate] duration-[250ms] ease-[ease] shown:pointer-events-auto shown:translate-y-0 shown:opacity-100 desk:top-5" id="toast" hidden>
     <span id="toastMsg"></span>
     <button id="toastUndo" class="cursor-pointer border-none bg-transparent p-0 font-display text-[14.5px] font-extrabold text-gold" hidden>Undo</button>
   </div>
