@@ -9,7 +9,6 @@
    cascade already reasoned about there). */
 
 @import "tailwindcss";
-@import "./css/brand.css" layer(components);
 @import "./css/components.css" layer(components);
 @import "./css/route.css" layer(components);
 @import "./css/map-overrides.css";
