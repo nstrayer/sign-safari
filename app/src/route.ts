@@ -629,7 +629,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (connectorsPath) {
       ctx.lineWidth = 0.8 / view.scale;
       ctx.strokeStyle = COLORS.connector;
+      ctx.setLineDash([3 / view.scale, 3 / view.scale]);
       ctx.stroke(connectorsPath);
+      ctx.setLineDash([]);
     }
     ctx.lineWidth = 1.1 / view.scale;
     ctx.strokeStyle = COLORS.street;
