@@ -3,7 +3,8 @@ import "./styles.css";
 
 import { dataUrl } from "./data";
 import { el } from "./dom";
-import { createStore, isMySignId, type Settings } from "./store";
+import { isMySignId } from "./ids";
+import { createStore, type Settings } from "./store";
 import { createSignMap } from "./map";
 import { createSearch } from "./search";
 import { createUi, createWelcome, type SignIndexEntry, type Ui } from "./ui";

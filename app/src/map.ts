@@ -8,6 +8,7 @@ import type {
   MapGeoJSONFeature,
   PointLike,
 } from "maplibre-gl";
+import { isBizId, isMySignId } from "./ids";
 import type { Kind, LonLat, SignCollection, SignProps, TappedFeature } from "./types";
 
 const OPENFREEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
@@ -229,7 +230,7 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
   }
 
   function sourceFor(id: string): string {
-    return id.startsWith("biz-") ? "biz" : id.startsWith("user:") ? "mine" : "signs";
+    return isBizId(id) ? "biz" : isMySignId(id) ? "mine" : "signs";
   }
 
   return {
@@ -244,8 +245,8 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
     },
     // feature-state can't drive filters, so hide-seen uses a literal id list.
     setHideSeen(hide, seenIds) {
-      const homeIds = seenIds.filter((id) => !id.startsWith("biz-"));
-      const bizIds = seenIds.filter((id) => id.startsWith("biz-"));
+      const homeIds = seenIds.filter((id) => !isBizId(id));
+      const bizIds = seenIds.filter(isBizId);
       const filterFor = (ids: string[]): FilterSpecification | undefined =>
         hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined;
       map.setFilter("signs-pts", filterFor(homeIds));

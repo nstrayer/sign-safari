@@ -5,6 +5,7 @@
 // sg2026.settings -> { hideSeen, showBiz, showBadges }
 // sg2026.welcomed -> "1" once the intro modal has been dismissed
 
+import { manualId, newMySignId } from "./ids";
 import type { LonLat } from "./types";
 
 const SEEN_KEY = "sg2026.seen";
@@ -58,16 +59,6 @@ export interface Store {
 }
 
 const DEFAULT_SETTINGS: Settings = { hideSeen: false, showBiz: true, showBadges: false };
-
-/** Ids of hand-entered codes with no sign in the map data. */
-export function isManualId(id: string): boolean {
-  return id.startsWith("manual:");
-}
-
-/** Ids of signs the user placed on the map themselves. */
-export function isMySignId(id: string): boolean {
-  return id.startsWith("user:");
-}
 
 function readJson<T extends object>(key: string, fallback: T): T {
   try {
@@ -142,7 +133,7 @@ export function createStore(): Store {
     addManualCode(code) {
       code = String(code ?? "").trim();
       if (!code) return null;
-      const id = "manual:" + code.toLowerCase();
+      const id = manualId(code);
       if (Object.hasOwn(codes, id)) return null;
       codes[id] = code;
       if (!Object.hasOwn(seen, id)) seen[id] = Math.floor(Date.now() / 1000);
@@ -153,7 +144,7 @@ export function createStore(): Store {
     },
     mySigns: () => Object.entries(mySigns).map(([id, coords]) => ({ id, coords })),
     addMySign(coords, code) {
-      const id = `user:${Date.now()}`;
+      const id = newMySignId();
       mySigns[id] = coords;
       seen[id] = Math.floor(Date.now() / 1000);
       code = String(code ?? "").trim();

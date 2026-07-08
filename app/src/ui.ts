@@ -1,7 +1,7 @@
 // UI: detail bottom sheet, progress pill + panel, toasts.
 
 import { el } from "./dom";
-import { isManualId, isMySignId } from "./store";
+import { isManualId, isMySignId } from "./ids";
 import type { Store } from "./store";
 import type { Kind, LonLat, SignProps, TappedFeature } from "./types";
 
