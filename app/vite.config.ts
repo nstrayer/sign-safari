@@ -7,9 +7,9 @@ export default defineConfig({
   // serves it at /sign-safari/, local verification serves it at /docs/.
   base: "./",
   build: {
-    // GitHub Pages serves main:/docs, so the committed build output lives
-    // there. outDir is outside the Vite root, so emptying it must be opted
-    // into; docs/ must never be hand-edited.
+    // docs/ is gitignored build output; the Pages deploy workflow uploads
+    // it as the site artifact. outDir is outside the Vite root, so emptying
+    // it must be opted into.
     outDir: "../docs",
     emptyOutDir: true,
   },

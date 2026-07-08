@@ -1,7 +1,7 @@
 # Sign Safari - Ann Arbor Summer Game 2026 Sign Map
 
-**Live at https://nickstrayer.me/sign-safari/** (GitHub Pages, `main` branch
-`/docs` folder).
+**Live at https://nickstrayer.me/sign-safari/** (GitHub Pages, deployed by
+the `Deploy to GitHub Pages` workflow on every push to `main`).
 
 A static web app showing a heat map of AADL Summer Game 2026 lawn signs, with
 address/GPS search and personal "seen it" tracking stored in localStorage.
@@ -21,8 +21,8 @@ per stop + the full track) for Garmin/Apple Watch/Strava.
 - `app/` - the source: a Vite + TypeScript project (strict, no framework;
   Tailwind v4 for the UI chrome, hand CSS for the brand treatment, canvas
   views, and MapLibre overrides). Data files live in `app/public/data/`.
-- `docs/` - **committed build output**, served as-is by GitHub Pages. Never
-  hand-edit it: every `npm run build` empties and regenerates it.
+- `docs/` - gitignored build output (`npm run build` empties and regenerates
+  it). CI builds its own copy; the local one is only for previewing.
 - `scripts/` - the Python data pipeline (below).
 
 ## Develop
@@ -40,8 +40,9 @@ cd app
 npm run build      # typechecks (tsc --noEmit), then rebuilds docs/
 ```
 
-Commit the regenerated `docs/` together with the source changes and push to
-`main` - that is the whole deploy. To preview the exact production build:
+Pushing to `main` is the whole deploy: `.github/workflows/deploy.yml` builds
+the app and publishes it to GitHub Pages (watch it with `gh run watch`).
+Building locally is only for previewing the exact production build:
 `npm run preview`, or serve the repo root (`python3 -m http.server 8000`) and
 open http://localhost:8000/docs/ to also exercise the subpath resolution that
 GitHub Pages uses at `/sign-safari/`. (Must be served over http, not opened
@@ -75,14 +76,8 @@ requires.)
    `app/public/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside
    the Ann Arbor/Ypsilanti core bbox are left out of the route planner.
 
-4. **Rebuild the app** so the refreshed data lands in `docs/data/` (editing
-   `app/public/data/` alone deploys nothing):
-
-   ```sh
-   cd app && npm run build
-   ```
-
-   Then commit and push as usual.
+4. Commit the refreshed `app/public/data/` files and push; the deploy
+   workflow bundles them into the published build.
 
 ## Notes
 
