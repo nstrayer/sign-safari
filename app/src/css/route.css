@@ -215,7 +215,7 @@
   text-align: center;
 }
 
-body.route-mode .search-wrap { display: none; }
+body.route-mode #searchWrap { display: none; }
 
 /* Narrow screens: drawer collapses to just the bar; the map is the star.
    The floating view switch and hint pill fold into the drawer bar. */

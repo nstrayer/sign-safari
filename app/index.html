@@ -106,11 +106,13 @@
     <div class="route-loading" id="routeLoading">Loading street network...</div>
   </section>
 
-  <div class="search-wrap" id="searchWrap">
+  <div class="fixed top-[calc(86px+env(safe-area-inset-top))] left-3 z-25 w-[min(420px,calc(100vw-24px))] desk:top-[calc(96px+env(safe-area-inset-top))]" id="searchWrap">
+    <!-- .search-box is a JS hook (main.ts) and the has-text ancestor for the
+         clear button; 16px on the input prevents iOS zoom-on-focus. -->
     <div class="search-box flex items-center gap-2 rounded-full bg-white py-1 pr-2 pl-4 shadow-card">
       <svg class="size-4.5 flex-none text-peri" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.4"/><line x1="15.5" y1="15.5" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
-      <input id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search an address or place" />
-      <button class="search-clear h-8 w-8 flex-none cursor-pointer rounded-full border-none bg-[#f0eef8] text-lg leading-none text-navy" id="searchClear" aria-label="Clear search">&times;</button>
+      <input class="min-w-0 flex-1 border-none bg-transparent py-[9px] font-body text-[16px] font-semibold text-ink outline-none placeholder:font-normal placeholder:text-[#a4a2bd] [&::-webkit-search-cancel-button]:hidden" id="searchInput" type="search" placeholder="Search an address or place..." autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search an address or place" />
+      <button class="hidden h-8 w-8 flex-none cursor-pointer rounded-full border-none bg-[#f0eef8] text-lg leading-none text-navy in-[.has-text]:block" id="searchClear" aria-label="Clear search">&times;</button>
     </div>
     <ul class="search-results mt-2 max-h-[46dvh] list-none overflow-y-auto rounded-card bg-white p-1.5 shadow-card" id="searchResults" role="listbox" hidden></ul>
   </div>

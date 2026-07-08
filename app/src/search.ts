@@ -88,7 +88,7 @@ export function createSearch({ input, clearBtn, resultsEl, wrapEl, store, onPick
     if (!items.length && !photonItems.length) {
       if (q.length >= 3) {
         const li = document.createElement("li");
-        li.className = "no-results";
+        li.className = "p-3 text-[13.5px] text-[#8c8aa8]";
         li.textContent = "No matches nearby - try a street name or place.";
         resultsEl.appendChild(li);
         resultsEl.hidden = false;
@@ -100,7 +100,7 @@ export function createSearch({ input, clearBtn, resultsEl, wrapEl, store, onPick
 
     const addGroup = (label: string) => {
       const li = document.createElement("li");
-      li.className = "group-label";
+      li.className = "px-3 pt-2 pb-1 text-[10.5px] font-extrabold tracking-[0.8px] text-peri uppercase";
       li.textContent = label;
       resultsEl.appendChild(li);
     };
@@ -108,15 +108,17 @@ export function createSearch({ input, clearBtn, resultsEl, wrapEl, store, onPick
     const addOption = (item: SearchItem) => {
       const li = document.createElement("li");
       li.setAttribute("role", "option");
+      li.className = "flex cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-[14.5px] font-semibold hover:bg-[#f4f2fb]";
       const dot = document.createElement("span");
-      dot.className = "result-dot";
-      if (item.kind === "place") dot.classList.add("place");
-      else if (store.isSeen(item.id)) dot.classList.add("seen");
+      let dotColor = "bg-coral shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(232,112,74,0.35)]";
+      if (item.kind === "place") dotColor = "bg-blue shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(91,194,240,0.35)]";
+      else if (store.isSeen(item.id)) dotColor = "bg-green shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(67,168,96,0.35)]";
+      dot.className = `size-2.5 flex-none rounded-full ${dotColor}`;
       const text = document.createElement("span");
       text.textContent = item.label;
       if (item.sub) {
         const sub = document.createElement("span");
-        sub.className = "result-sub";
+        sub.className = "block text-[12px] font-normal text-[#8c8aa8]";
         sub.textContent = item.sub;
         text.appendChild(sub);
       }

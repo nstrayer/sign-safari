@@ -14,84 +14,6 @@ html, body {
   background: #eef0f4;
 }
 
-/* ---------- Search ---------- */
-
-.search-wrap {
-  position: fixed;
-  top: calc(86px + env(safe-area-inset-top));
-  left: 12px;
-  width: min(420px, calc(100vw - 24px));
-  z-index: 25;
-}
-
-.search-box input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-family: var(--font-body);
-  font-size: 16px; /* prevents iOS zoom-on-focus */
-  font-weight: 600;
-  color: var(--color-ink);
-  padding: 9px 0;
-}
-
-.search-box input::placeholder { color: #a4a2bd; font-weight: 400; }
-.search-box input::-webkit-search-cancel-button { display: none; }
-
-.search-clear { display: none; }
-
-.search-box.has-text .search-clear { display: block; }
-
-.search-results .group-label {
-  padding: 8px 12px 4px;
-  font-size: 10.5px;
-  font-weight: 800;
-  letter-spacing: 0.8px;
-  text-transform: uppercase;
-  color: var(--color-peri);
-}
-
-.search-results li[role="option"] {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  font-size: 14.5px;
-  font-weight: 600;
-}
-
-.search-results li[role="option"]:hover,
-.search-results li[role="option"].active { background: #f4f2fb; }
-
-.search-results .result-dot {
-  flex: none;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--color-coral);
-  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px rgba(232, 112, 74, 0.35);
-}
-
-.search-results .result-dot.place { background: var(--color-blue); box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px rgba(91, 194, 240, 0.35); }
-.search-results .result-dot.seen { background: var(--color-green); box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px rgba(67, 168, 96, 0.35); }
-
-.search-results .result-sub {
-  display: block;
-  font-size: 12px;
-  font-weight: 400;
-  color: #8c8aa8;
-}
-
-.search-results .no-results {
-  padding: 12px;
-  font-size: 13.5px;
-  color: #8c8aa8;
-}
-
 /* ---------- Detail sheet ---------- */
 
 .sheet {
@@ -355,8 +277,6 @@ html, body {
 /* ---------- Desktop layout ---------- */
 
 @media (min-width: 900px) {
-  .search-wrap { top: calc(96px + env(safe-area-inset-top)); }
-
   .sheet {
     left: 12px;
     right: auto;
