@@ -15,7 +15,7 @@
 // mode.
 
 import { dataUrl } from "./data";
-import { el } from "./dom";
+import { el, svgEl } from "./dom";
 import { createGeocoder } from "./geocoder";
 import {
   MIN_PER_KM,
@@ -33,7 +33,7 @@ import {
 } from "./optimizer";
 import type { Graph, Shortest } from "./optimizer";
 import type { LonLat, NetworkData, NetworkSign } from "./types";
-import type { Store } from "./store";
+import type { DistanceUnit, Store } from "./store";
 
 const COLORS = {
   street: "#c9cdd4",
@@ -44,10 +44,47 @@ const COLORS = {
   seed: "#ffb43b",
 };
 
+/** Meters in one mile (international). */
+const M_PER_MI = 1609.344;
+
+/** Distance-budget slider range in the active display unit. */
+const DISTANCE_SLIDER = {
+  km: { min: 0.5, max: 15, step: 0.5, def: 3 },
+  mi: { min: 0.5, max: 10, step: 0.5, def: 2 },
+} as const;
+
 // ---------- Walkthrough helpers ----------
 
-function fmtMeters(m: number): string {
+/**
+ * Format a meter distance for display in the preferred unit.
+ * Short legs stay in meters/feet; longer ones use km/mi.
+ *
+ * @param m - Distance in meters
+ * @param unit - Preferred large-distance unit
+ * @returns Human-readable distance string
+ *
+ * @example
+ * fmtMeters(120, 'km') // "120 m"
+ * fmtMeters(3200, 'mi') // "2.0 mi"
+ */
+function fmtMeters(m: number, unit: DistanceUnit): string {
+  if (unit === 'mi') {
+    if (m < 500) return `${Math.max(10, Math.round(m * 3.28084 / 10) * 10)} ft`;
+    return `${(m / M_PER_MI).toFixed(1)} mi`;
+  }
   return m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1)} km`;
+}
+
+/**
+ * Format a large route distance (always km or mi, never m/ft).
+ *
+ * @param m - Distance in meters
+ * @param unit - Preferred display unit
+ * @returns e.g. "3.2 km" or "2.0 mi"
+ */
+function fmtRouteKm(m: number, unit: DistanceUnit): string {
+  if (unit === 'mi') return `${(m / M_PER_MI).toFixed(1)} mi`;
+  return `${(m / 1000).toFixed(1)} km`;
 }
 
 // Coarse compass direction for a world-coord delta (x east, y north).
@@ -97,6 +134,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     budgetLabel: el("budgetLabel"),
     skipSeen: el<HTMLInputElement>("skipSeen"),
     loopBack: el<HTMLInputElement>("loopBack"),
+    fullSpeed: el<HTMLInputElement>("fullSpeed"),
+    createRoute: el<HTMLButtonElement>("createRoute"),
+    createRouteIcon: svgEl("createRouteIcon"),
+    createRouteLabel: el("createRouteLabel"),
     summary: el("routeSummary"),
     actions: el("routeActions"),
     exportGpx: el("exportGpx"),
@@ -193,12 +234,32 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     return "plan";
   }
 
+  /**
+   * Enter the plan step with a new start. Settings stay editable; the user
+   * taps Create route when ready (no auto-build).
+   *
+   * @param next - Starting node and label from map tap, GPS, or address search
+   */
   function setSeed(next: Seed) {
     seed = next;
     els.seedLabel.textContent = seed.label;
     store.setRouteIntroSeen();
+    // Drop any in-flight or previous route so the map matches the new start.
+    buildGen++;
+    route = null;
+    routePath = null;
+    race = null;
+    setBuilding(false);
+    els.summary.hidden = true;
+    els.actions.hidden = true;
+    els.walkStart.hidden = true;
+    els.stops.hidden = true;
+    els.createRoute.hidden = false;
+    setCreateRouteUi("create");
     setStep("plan");
-    rebuild();
+    els.drawerTitle.textContent = "Set your budget, then create";
+    setDrawer(true);
+    scheduleDraw();
   }
 
   els.introGo.addEventListener("click", () => {
@@ -207,10 +268,12 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   });
 
   els.changeStart.addEventListener("click", () => {
+    buildGen++;
     seed = null;
     route = null;
     routePath = null;
     race = null;
+    setBuilding(false);
     setStep("start");
     scheduleDraw();
   });
@@ -362,9 +425,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       ctx.lineWidth = 4 / view.scale;
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      ctx.strokeStyle = COLORS.route;
-      // Walking: the full route fades back so the current leg pops.
-      if (walk) ctx.globalAlpha = 0.25;
+      ctx.strokeStyle = walk ? COLORS.unseen : COLORS.route;
+      // Walking: light coral so the rest of the path reads against gray streets.
+      if (walk) ctx.globalAlpha = 0.38;
       ctx.stroke(routePath);
       ctx.globalAlpha = 1;
       if (walk && walkLegPath) {
@@ -675,6 +738,12 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     return mode === "distance" ? `${(+els.slider.value).toFixed(1)} km` : `${els.slider.value} signs`;
   }
 
+  /**
+   * Switch between distance and sign-count budgets. Does not rebuild; the
+   * user confirms with Create route.
+   *
+   * @param next - Budget mode to activate
+   */
   function setMode(next: "distance" | "count") {
     mode = next;
     els.modeDistance.classList.toggle("is-active", mode === "distance");
@@ -684,15 +753,12 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (mode === "distance" && !(+keep >= 0.5 && +keep <= 15)) els.slider.value = "3";
     if (mode === "count" && !(+keep >= 5 && +keep <= 100)) els.slider.value = "20";
     els.budgetLabel.textContent = budgetText();
-    rebuild();
   }
 
   els.modeDistance.addEventListener("click", () => setMode("distance"));
   els.modeCount.addEventListener("click", () => setMode("count"));
   els.slider.addEventListener("input", () => { els.budgetLabel.textContent = budgetText(); });
-  els.slider.addEventListener("change", rebuild);
-  els.skipSeen.addEventListener("change", rebuild);
-  els.loopBack.addEventListener("change", rebuild);
+  els.createRoute.addEventListener("click", () => rebuild());
   store.onSeenChange(() => scheduleDraw());
 
   // ---------- Build + result ----------
@@ -719,9 +785,40 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.drawerTitle.textContent = text;
   }
 
+  /** Primary coral fill (first create) vs navy outline (recreate). */
+  const CREATE_PRIMARY =
+    "cursor-pointer appearance-none inline-flex w-full items-center justify-center gap-2 rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60";
+  const CREATE_SECONDARY =
+    "cursor-pointer appearance-none inline-flex w-full items-center justify-center gap-2 rounded-full border-[2.5px] border-navy bg-white px-4 py-2.5 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white disabled:opacity-60";
+
+  /**
+   * Set Create/Recreate label and primary vs secondary chrome.
+   * Recreate uses outline styling so Walk with me stays the clear primary CTA.
+   *
+   * @param kind - Idle create, in-flight, or recreate-after-result
+   */
+  function setCreateRouteUi(kind: "create" | "creating" | "recreate"): void {
+    const secondary = kind === "recreate";
+    els.createRoute.className = secondary ? CREATE_SECONDARY : CREATE_PRIMARY;
+    // SVGElement has no reliable .hidden IDL - toggle the attribute instead.
+    if (secondary) els.createRouteIcon.removeAttribute("hidden");
+    else els.createRouteIcon.setAttribute("hidden", "");
+    els.createRouteLabel.textContent =
+      kind === "creating" ? "Creating..." : kind === "recreate" ? "Recreate route" : "Create route";
+  }
+
+  /**
+   * Toggle build-in-progress UI: spinner on the status line and a disabled
+   * Create route button so settings can still be read but not re-fired.
+   *
+   * @param on - Whether a narrated build is running
+   */
   function setBuilding(on: boolean) {
     els.summary.classList.toggle("building", on);
     els.drawerTitle.classList.toggle("building", on);
+    els.createRoute.disabled = on;
+    if (on) setCreateRouteUi("creating");
+    else setCreateRouteUi(route ? "recreate" : "create");
   }
 
   function appendLeg(path: Path2D, leg: number[], isFirst: boolean) {
@@ -733,6 +830,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
   }
 
+  /**
+   * Start a narrated route build from the current seed and plan controls.
+   * Called only from the Create route button (settings no longer auto-run).
+   */
   function rebuild() {
     if (!seed || !graph) return;
     // A rebuilt route supersedes any shared one; drop the stale link hash.
@@ -744,12 +845,15 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.stops.hidden = true;
     els.actions.hidden = true;
     els.walkStart.hidden = true;
-    // The drawer stays open so the budget controls remain tweakable on
-    // phones; with the stops list hidden it is short enough that the build
-    // animation still gets most of the map.
+    // The drawer stays open so the budget controls remain visible on phones;
+    // Create is disabled while the animation runs.
     // Let the status paint before the synchronous Dijkstra work starts.
     setTimeout(() => runBuild(gen).catch(console.error), 30);
   }
+
+  // Slow mode (default) stretches each narrated pause by this factor so the
+  // race / untangle steps are easier to follow. Full speed uses 1×.
+  const BUILD_SLOW_MULT = 1.5;
 
   // The narrated build: race a few greedy starts against each other, keep
   // the winner, watch 2-opt untangle it, then spend any budget the
@@ -757,6 +861,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   async function runBuild(gen: number) {
     const alive = () => gen === buildGen && !!seed && !!graph;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Pause for `ms`, stretched in slow mode unless Full speed is checked. */
+    const pause = (ms: number) =>
+      sleep(Math.round(ms * (els.fullSpeed.checked ? 1 : BUILD_SLOW_MULT)));
     if (!alive()) return;
     // alive() just guaranteed these; re-check so TS narrows, and capture
     // non-null bindings for the closures below.
@@ -816,19 +923,19 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         });
         setStatus(`Trying ${candidates.length} different starts...`);
         scheduleDraw();
-        await sleep(delay);
+        await pause(delay);
         if (!alive()) return;
       }
 
       // Phase 2: declare the winner, fade the rest.
       const w = candidates[winnerIdx];
       setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopSigns.length} signs, ${(w.totalMeters / 1000).toFixed(1)} km`);
-      await sleep(500);
+      await pause(500);
       if (!alive()) return;
       for (let step = 0; step < 8; step++) {
         race.forEach((c, i) => { if (i !== winnerIdx) c.alpha *= 0.62; });
         scheduleDraw();
-        await sleep(55);
+        await pause(55);
         if (!alive()) return;
       }
       race = null;
@@ -839,7 +946,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       };
       routePath = pathFromNodes(route.pathNodes);
       scheduleDraw();
-      await sleep(400);
+      await pause(400);
       if (!alive()) return;
     } else {
       // Single viable start: reveal it leg by leg instead.
@@ -857,7 +964,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
             : `Collecting signs... ${i + 1} of ${stopSigns.length}`
         );
         scheduleDraw();
-        await sleep(revealDelay);
+        await pause(revealDelay);
         if (!alive()) return;
       }
       route.shown = undefined;
@@ -876,7 +983,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     };
 
     setStatus("Checking for crossings...");
-    await sleep(450);
+    await pause(450);
     if (!alive()) return;
 
     for (let round = 1; round <= 3; round++) {
@@ -886,13 +993,13 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         refreshRoute();
         setStatus(`Untangling the route - pass ${step.pass}, saved ${Math.round(step.saved)} m`);
         scheduleDraw();
-        await sleep(90);
+        await pause(90);
         if (!alive()) return;
       }
       if (round === 1 && !untangled) {
         setStatus("No crossings - clean route");
         scheduleDraw();
-        await sleep(500);
+        await pause(500);
         if (!alive()) return;
       }
 
@@ -903,7 +1010,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       refreshRoute();
       setStatus(`Leftover budget - adding ${added} more sign${added > 1 ? "s" : ""}...`);
       scheduleDraw();
-      await sleep(700);
+      await pause(700);
       if (!alive()) return;
     }
 
@@ -913,7 +1020,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       refreshRoute();
       setStatus(`Scooping up ${swept} sign${swept > 1 ? "s" : ""} already on the way...`);
       scheduleDraw();
-      await sleep(700);
+      await pause(700);
       if (!alive()) return;
     }
 
@@ -930,7 +1037,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         const n = stretched + bonus;
         setStatus(`Stretching a bit for ${n} more sign${n > 1 ? "s" : ""}...`);
         scheduleDraw();
-        await sleep(700);
+        await pause(700);
         if (!alive()) return;
       }
     }
@@ -957,6 +1064,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const g = graph;
     const km = route.totalMeters / 1000;
     setStatus(`${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`);
+    els.createRoute.hidden = false;
+    setCreateRouteUi("recreate");
     els.actions.hidden = false;
     els.walkStart.hidden = false;
     els.stops.innerHTML = "";
