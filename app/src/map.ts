@@ -40,7 +40,7 @@ export interface SignMap {
   setMySigns(signs: { id: string; coords: LonLat }[]): void;
   setSeen(id: string, isSeen: boolean): void;
   applySeen(ids: string[]): void;
-  setHideSeen(hide: boolean, seenIds: string[]): void;
+  setHideSeen(hide: boolean): void;
   setLayerVisible(layerId: string, visible: boolean): void;
   flyTo(coords: LonLat, zoom?: number): void;
   /** True if coords fall inside the map's panning bounds. */
@@ -119,6 +119,23 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
   });
 
   const seenExpr: ExpressionSpecification = ["boolean", ["feature-state", "seen"], false];
+
+  // MapLibre limitation: feature-state drives paint (the seen color) but
+  // cannot drive layer filters, so hide-seen rebuilds literal id-list filters
+  // from this internal copy of the seen set, which setSeen/applySeen maintain.
+  const seenSet = new Set<string>();
+  let hideSeen = false;
+
+  function refreshSeenFilters(): void {
+    const seenIds = [...seenSet];
+    const homeIds = seenIds.filter((id) => !isBizId(id));
+    const bizIds = seenIds.filter(isBizId);
+    const filterFor = (ids: string[]): FilterSpecification | undefined =>
+      hideSeen && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined;
+    map.setFilter("signs-pts", filterFor(homeIds));
+    map.setFilter("signs-heat", filterFor(homeIds));
+    map.setFilter("biz-pts", filterFor(bizIds));
+  }
 
   function addLayers({ signs, biz, badges }: { signs: SignCollection; biz: SignCollection; badges: SignCollection }): void {
     map.addSource("signs", { type: "geojson", data: signs, promoteId: "id" });
@@ -238,20 +255,21 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
     onLoad(fn) { map.on("load", fn); },
     addLayers,
     setSeen(id, isSeen) {
+      if (isSeen) seenSet.add(id);
+      else seenSet.delete(id);
       map.setFeatureState({ source: sourceFor(id), id }, { seen: isSeen });
+      if (hideSeen) refreshSeenFilters();
     },
     applySeen(ids) {
-      for (const id of ids) this.setSeen(id, true);
+      for (const id of ids) {
+        seenSet.add(id);
+        map.setFeatureState({ source: sourceFor(id), id }, { seen: true });
+      }
+      if (hideSeen) refreshSeenFilters();
     },
-    // feature-state can't drive filters, so hide-seen uses a literal id list.
-    setHideSeen(hide, seenIds) {
-      const homeIds = seenIds.filter((id) => !isBizId(id));
-      const bizIds = seenIds.filter(isBizId);
-      const filterFor = (ids: string[]): FilterSpecification | undefined =>
-        hide && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined;
-      map.setFilter("signs-pts", filterFor(homeIds));
-      map.setFilter("signs-heat", filterFor(homeIds));
-      map.setFilter("biz-pts", filterFor(bizIds));
+    setHideSeen(hide) {
+      hideSeen = hide;
+      refreshSeenFilters();
     },
     setMySigns(signs) {
       // Before addLayers has run (style still loading) there is nothing to

@@ -170,7 +170,7 @@ async function main(): Promise<void> {
     const applySettings = (s: Settings): void => {
       signMap.setLayerVisible("biz-pts", s.showBiz);
       signMap.setLayerVisible("badge-pts", s.showBadges);
-      signMap.setHideSeen(s.hideSeen, store.seenIds());
+      signMap.setHideSeen(s.hideSeen);
     };
     applySettings(store.settings());
     store.onSettingsChange(applySettings);
@@ -178,7 +178,6 @@ async function main(): Promise<void> {
     store.onSeenChange((id, isSeen) => {
       if (isMySignId(id)) syncMySigns();
       signMap.setSeen(id, isSeen);
-      if (store.settings().hideSeen) signMap.setHideSeen(true, store.seenIds());
     });
   });
 }
