@@ -21,6 +21,7 @@ import type { Store } from "./store";
 
 const COLORS = {
   street: "#c9cdd4",
+  connector: "#e4e2d8",
   unseen: "#e8704a",
   seen: "#43a860",
   route: "#2f3061",
@@ -399,6 +400,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let graph: Graph | null = null;
   let shortest: Shortest | null = null;
   let streetsPath: Path2D | null = null; // Path2D in world coords
+  let connectorsPath: Path2D | null = null; // sign-access stubs, drawn fainter than roads
   let loadPromise: Promise<void> | null = null;
 
   // View state: world center + pixels per world unit.
@@ -498,11 +500,17 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         .then((raw) => {
           graph = buildGraph(raw);
           shortest = makeDijkstraCache(graph);
+          // Sign nodes are leaves hanging off the road network via short
+          // access edges (see build_network.py); split those out so they
+          // don't read as streets.
+          const signNodes = new Set(graph.signs.map((s) => s.n));
           streetsPath = new Path2D();
+          connectorsPath = new Path2D();
           for (let e = 0; e < graph.edgeCount; e++) {
             const a = graph.edges[e * 3], b = graph.edges[e * 3 + 1];
-            streetsPath.moveTo(graph.xs[a], graph.ys[a]);
-            streetsPath.lineTo(graph.xs[b], graph.ys[b]);
+            const path = signNodes.has(a) || signNodes.has(b) ? connectorsPath : streetsPath;
+            path.moveTo(graph.xs[a], graph.ys[a]);
+            path.lineTo(graph.xs[b], graph.ys[b]);
           }
           els.loading.hidden = true;
           fitToSigns();
@@ -611,6 +619,11 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     ctx.translate(w / 2, h / 2);
     ctx.scale(view.scale, -view.scale);
     ctx.translate(-view.cx, -view.cy);
+    if (connectorsPath) {
+      ctx.lineWidth = 0.8 / view.scale;
+      ctx.strokeStyle = COLORS.connector;
+      ctx.stroke(connectorsPath);
+    }
     ctx.lineWidth = 1.1 / view.scale;
     ctx.strokeStyle = COLORS.street;
     ctx.stroke(streetsPath);
@@ -623,21 +636,40 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
     ctx.restore();
 
-    // Signs in screen space so dot sizes stay honest across zooms.
+    // Signs in screen space so dot sizes stay honest across zooms. Zoomed
+    // out the dots pile up, so they go translucent and fill one by one -
+    // overlaps stack into a rough density map - ramping back to solid
+    // (and a batched single fill) as the view zooms in.
     const r = Math.max(2.5, Math.min(9, view.scale / 1400));
-    const unseenDots = new Path2D();
-    const seenDots = new Path2D();
+    const dotAlpha = Math.min(1, 0.3 + 0.7 * Math.max(0, view.scale / view.fitScale - 1.2) / 4);
+    const unseenPts: number[] = [];
+    const seenPts: number[] = [];
     for (const s of graph.signs) {
       const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
       if (sx < -20 || sy < -20 || sx > w + 20 || sy > h + 20) continue;
-      const path = store.isSeen(s.id) ? seenDots : unseenDots;
-      path.moveTo(sx + r, sy);
-      path.arc(sx, sy, r, 0, Math.PI * 2);
+      (store.isSeen(s.id) ? seenPts : unseenPts).push(sx, sy);
     }
-    ctx.fillStyle = COLORS.seen;
-    ctx.fill(seenDots);
-    ctx.fillStyle = COLORS.unseen;
-    ctx.fill(unseenDots);
+    const fillDots = (pts: number[], color: string) => {
+      ctx.fillStyle = color;
+      if (dotAlpha >= 1) {
+        const dots = new Path2D();
+        for (let i = 0; i < pts.length; i += 2) {
+          dots.moveTo(pts[i] + r, pts[i + 1]);
+          dots.arc(pts[i], pts[i + 1], r, 0, Math.PI * 2);
+        }
+        ctx.fill(dots);
+      } else {
+        ctx.globalAlpha = dotAlpha;
+        for (let i = 0; i < pts.length; i += 2) {
+          ctx.beginPath();
+          ctx.arc(pts[i], pts[i + 1], r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+      }
+    };
+    fillDots(seenPts, COLORS.seen);
+    fillDots(unseenPts, COLORS.unseen);
 
     // Racing candidate routes go above the dots, dashed differently per
     // candidate so overlapping stretches stay tellable-apart.
