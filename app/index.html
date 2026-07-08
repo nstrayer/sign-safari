@@ -171,7 +171,12 @@
       <p class="rounded-[14px] bg-white p-3.5 text-sm text-[#8c88a0]" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
 
       <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Your codes</h3>
-      <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text.</p>
+      <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text. Spotted a sign that isn't on the map? Add its code by hand below.</p>
+      <div class="mb-2.5 flex gap-2">
+        <!-- 16px input font prevents iOS zoom-on-focus -->
+        <input class="min-w-0 flex-1 rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="extraCodeInput" type="text" placeholder="Code from a missing sign" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code from a sign not on the map" />
+        <button class="flex-none cursor-pointer rounded-full border-none bg-navy px-5 font-display text-sm font-bold text-white active:scale-[0.96]" id="extraCodeAdd">Add</button>
+      </div>
       <div class="flex gap-2.5">
         <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="copyCodesBtn">Copy code list</button>
       </div>

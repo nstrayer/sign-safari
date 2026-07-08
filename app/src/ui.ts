@@ -1,6 +1,7 @@
 // UI: detail bottom sheet, progress pill + panel, toasts.
 
 import { el } from "./dom";
+import { isManualId } from "./store";
 import type { Store } from "./store";
 import type { Kind, LonLat, SignProps, TappedFeature } from "./types";
 
@@ -88,6 +89,8 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     seenBtn: el("seenBtn"),
     copyCodesBtn: el("copyCodesBtn"),
     codesNote: el("codesNote"),
+    extraCodeInput: el<HTMLInputElement>("extraCodeInput"),
+    extraCodeAdd: el("extraCodeAdd"),
     panel: el("progressPanel"),
     panelClose: el("panelClose"),
     statTotal: el("statTotal"),
@@ -135,7 +138,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
       dot.className = "size-2.5 flex-none rounded-full bg-green";
       const label = document.createElement("span");
       label.className = "min-w-0 flex-1 wrap-anywhere";
-      label.textContent = item ? item.label : `Sign ${id}`;
+      label.textContent = item ? item.label : isManualId(id) ? "Added by hand" : `Sign ${id}`;
       const when = document.createElement("span");
       when.className = "ml-auto flex-none text-[12px] font-bold text-[#a09dba]";
       when.textContent = fmtWhen(at);
@@ -249,11 +252,15 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
 
   // ---------- Progress panel ----------
 
+  function renderCopyCodesBtn(): void {
+    const n = store.codeCount();
+    els.copyCodesBtn.textContent = n ? `Copy code list (${n})` : "Copy code list";
+  }
+
   function openPanel(): void {
     renderProgress();
     renderSeenList();
-    const n = store.codeCount();
-    els.copyCodesBtn.textContent = n ? `Copy code list (${n})` : "Copy code list";
+    renderCopyCodesBtn();
     els.panel.hidden = false;
   }
 
@@ -286,6 +293,32 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
   els.toggleHideSeen.addEventListener("change", () => store.setSetting("hideSeen", els.toggleHideSeen.checked));
   els.toggleBiz.addEventListener("change", () => store.setSetting("showBiz", els.toggleBiz.checked));
   els.toggleBadges.addEventListener("change", () => store.setSetting("showBadges", els.toggleBadges.checked));
+
+  // ---------- Manual codes (signs missing from the data) ----------
+
+  function addExtraCode(): void {
+    const val = els.extraCodeInput.value;
+    const id = store.addManualCode(val);
+    if (!id) {
+      if (val.trim()) showToast("That code is already in your list.");
+      return;
+    }
+    els.extraCodeInput.value = "";
+    renderCopyCodesBtn();
+    showToast(`Code saved - ${store.codeCount()} collected!`, () => {
+      store.setCode(id, "");
+      store.toggle(id);
+      renderCopyCodesBtn();
+    });
+  }
+
+  els.extraCodeAdd.addEventListener("click", addExtraCode);
+  els.extraCodeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      addExtraCode();
+      els.extraCodeInput.blur();
+    }
+  });
 
   // ---------- Backup ----------
 

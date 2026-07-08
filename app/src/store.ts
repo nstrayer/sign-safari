@@ -32,6 +32,8 @@ export interface Store {
   getCode(id: string): string;
   /** Recording a code implies the sign was seen. */
   setCode(id: string, code: string): void;
+  /** Records a code for a sign that isn't in the map data. Returns its id, or null if blank/duplicate. */
+  addManualCode(code: string): string | null;
   codeCount(): number;
   /** Codes ordered by when their sign was marked seen (oldest first). */
   allCodes(): { id: string; code: string; at: number }[];
@@ -47,6 +49,11 @@ export interface Store {
 }
 
 const DEFAULT_SETTINGS: Settings = { hideSeen: false, showBiz: true, showBadges: false };
+
+/** Ids of hand-entered codes with no sign in the map data. */
+export function isManualId(id: string): boolean {
+  return id.startsWith("manual:");
+}
 
 function readJson<T extends object>(key: string, fallback: T): T {
   try {
@@ -116,6 +123,18 @@ export function createStore(): Store {
       writeJson(CODES_KEY, codes);
       writeJson(SEEN_KEY, seen);
       notifySeen(id, Object.hasOwn(seen, id));
+    },
+    addManualCode(code) {
+      code = String(code ?? "").trim();
+      if (!code) return null;
+      const id = "manual:" + code.toLowerCase();
+      if (Object.hasOwn(codes, id)) return null;
+      codes[id] = code;
+      if (!Object.hasOwn(seen, id)) seen[id] = Math.floor(Date.now() / 1000);
+      writeJson(CODES_KEY, codes);
+      writeJson(SEEN_KEY, seen);
+      notifySeen(id, true);
+      return id;
     },
     codeCount: () => Object.keys(codes).length,
     allCodes() {
