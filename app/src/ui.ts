@@ -141,9 +141,20 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
       when.textContent = fmtWhen(at);
       const code = store.getCode(id);
       if (code) {
-        const chip = document.createElement("span");
-        chip.className = "mt-[3px] block w-fit rounded-full bg-gold/35 px-[9px] pt-px pb-0.5 font-body text-[12px] font-bold text-navy";
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "mt-[3px] block w-fit cursor-pointer rounded-full bg-gold/35 px-[9px] pt-px pb-0.5 font-body text-[12px] font-bold text-navy active:bg-gold/60";
         chip.textContent = code;
+        chip.title = "Tap to copy";
+        chip.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          try {
+            await navigator.clipboard.writeText(code);
+            showToast(`Copied ${code}`);
+          } catch {
+            showToast("Couldn't access clipboard.");
+          }
+        });
         label.appendChild(chip);
       }
       li.append(dot, label, when);
