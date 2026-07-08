@@ -22,7 +22,8 @@
 
 import { dataUrl } from "./data";
 import { el } from "./dom";
-import type { LonLat, NetworkData, NetworkSign, PhotonResponse } from "./types";
+import { createGeocoder } from "./geocoder";
+import type { LonLat, NetworkData, NetworkSign } from "./types";
 import type { Store } from "./store";
 
 const COLORS = {
@@ -43,8 +44,6 @@ const INTRO_KEY = "sg2026.routeIntro";
 // sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
 // walkthrough is underway, so a reload drops you back mid-walk.
 const WALK_KEY = "sg2026.walk";
-const PHOTON_URL = "https://photon.komoot.io/api/";
-const AREA = { lat: 42.2808, lon: -83.743, bbox: "-84.25,42.0,-83.35,42.55" };
 
 // ---------- Graph ----------
 
@@ -1030,8 +1029,11 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // Address search: instant matches over sign addresses, Photon places after
   // a pause (same service and area bias as the map tab's search).
-  let addrDebounce: ReturnType<typeof setTimeout> | null = null;
-  let photonAbort: AbortController | null = null;
+  const geocoder = createGeocoder({
+    limit: 4,
+    currentQuery: () => els.addrInput.value.trim(),
+    dedupeNameInSub: true,
+  });
 
   function renderAddrResults(items: AddrItem[]) {
     els.addrResults.innerHTML = "";
@@ -1071,8 +1073,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   els.addrInput.addEventListener("input", () => {
     const q = els.addrInput.value.trim();
-    clearTimeout(addrDebounce ?? undefined);
-    photonAbort?.abort();
+    geocoder.cancel();
     if (q.length < 2 || !graph) {
       els.addrResults.hidden = true;
       return;
@@ -1080,28 +1081,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const locals = localAddrMatches(q);
     renderAddrResults(locals);
     if (q.length < 3) return;
-    addrDebounce = setTimeout(async () => {
-      photonAbort = new AbortController();
-      const url = `${PHOTON_URL}?q=${encodeURIComponent(q)}&lat=${AREA.lat}&lon=${AREA.lon}&bbox=${AREA.bbox}&limit=4`;
-      try {
-        const res = await fetch(url, { signal: photonAbort.signal });
-        if (!res.ok) return;
-        const data = (await res.json()) as PhotonResponse;
-        if (els.addrInput.value.trim() !== q) return; // stale
-        const places = (data.features ?? []).map((f) => {
-          const p = f.properties;
-          const street = p.street && p.housenumber ? `${p.housenumber} ${p.street}` : p.street;
-          return {
-            label: p.name ?? street ?? "Unknown place",
-            sub: [street !== p.name ? street : null, p.city ?? p.district].filter(Boolean).join(", "),
-            coords: f.geometry.coordinates,
-          };
-        });
-        renderAddrResults([...locals, ...places]);
-      } catch (e) {
-        if (!(e instanceof Error) || e.name !== "AbortError") console.warn("Photon search failed", e);
-      }
-    }, 300);
+    geocoder.query(q, (places) => renderAddrResults([...locals, ...places]));
   });
 
   // ---------- Budget controls ----------
