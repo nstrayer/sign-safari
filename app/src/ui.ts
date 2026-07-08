@@ -41,6 +41,8 @@ function fmtWhen(epochSec: number): string {
 }
 
 const KIND_LABELS: Record<Kind, string> = { sign: "Lawn sign", biz: "Business code", badge: "Badge spot" };
+const KIND_CHIP_BASE = "inline-block rounded-full px-3 pt-[3px] pb-1 font-display text-[11px] font-bold tracking-[0.8px] uppercase";
+const KIND_CHIP_COLORS: Record<Kind, string> = { sign: "bg-peri text-white", biz: "bg-blue text-white", badge: "bg-gold text-navy" };
 
 // Welcome / info modal. Created before the data fetch so it appears
 // immediately on a first visit, and wired to the header's "?" button.
@@ -139,7 +141,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
       const code = store.getCode(id);
       if (code) {
         const chip = document.createElement("span");
-        chip.className = "code-chip";
+        chip.className = "mt-[3px] block w-fit rounded-full bg-gold/35 px-[9px] pt-px pb-0.5 font-body text-[12px] font-bold text-navy";
         chip.textContent = code;
         label.appendChild(chip);
       }
@@ -160,7 +162,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     current = feature;
     const { kind, props } = feature;
     els.kind.textContent = KIND_LABELS[kind] ?? "Sign";
-    els.kind.className = `sheet-kind${kind !== "sign" ? ` kind-${kind}` : ""}`;
+    els.kind.className = `${KIND_CHIP_BASE} ${KIND_CHIP_COLORS[kind] ?? KIND_CHIP_COLORS.sign}`;
     els.addr.textContent = props.addr ?? props.label ?? "Mystery spot";
     els.sub.textContent = [props.city, props.zip].filter(Boolean).join(", ");
     const reds = Number(props.reds ?? 0);
