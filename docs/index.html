@@ -15,8 +15,8 @@
 
   <!-- CSS (maplibre's and ours) is imported from src/main.ts so Vite owns
        ordering and cache-busting via hashed asset names. -->
-  <script type="module" crossorigin src="./assets/index-DMN5ewRS.js"></script>
-  <link rel="stylesheet" crossorigin href="./assets/index-Dqmnunmw.css">
+  <script type="module" crossorigin src="./assets/index-wUDET2Bm.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-C9tHhDnO.css">
 </head>
 <body>
   <div id="map" aria-label="Map of Summer Game signs"></div>
@@ -99,7 +99,7 @@
         </div>
         <p class="route-summary" id="routeSummary" hidden></p>
         <div class="flex gap-2" id="routeActions" hidden>
-          <button class="pill-btn" id="exportGpx">Export GPX for your watch</button>
+          <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="exportGpx">Export GPX for your watch</button>
         </div>
         <ol class="route-stops" id="routeStops" hidden></ol>
       </div>
@@ -138,12 +138,12 @@
   </section>
 
   <!-- Progress panel -->
-  <section class="panel" id="progressPanel" role="dialog" aria-modal="true" aria-label="Your progress" hidden>
-    <div class="panel-header">
+  <section class="fixed inset-0 z-50 flex flex-col bg-cream pt-[env(safe-area-inset-top)] desk:inset-[auto_12px_12px_auto] desk:top-[calc(10px+env(safe-area-inset-top))] desk:w-[400px] desk:overflow-hidden desk:rounded-[22px] desk:shadow-card" id="progressPanel" role="dialog" aria-modal="true" aria-label="Your progress" hidden>
+    <div class="flex items-center justify-between bg-navy bg-halftone px-5 pt-4 pb-2.5">
       <h2 class="font-display text-2xl font-extrabold text-white">Your safari</h2>
       <button class="h-[38px] w-[38px] cursor-pointer rounded-full border-none bg-white/14 text-[22px] leading-none text-white" id="panelClose" aria-label="Close">&times;</button>
     </div>
-    <div class="panel-scroll">
+    <div class="flex-1 overflow-y-auto px-5 pt-[18px] pb-[calc(24px+env(safe-area-inset-bottom))]">
       <div class="grid grid-cols-3 gap-2.5">
         <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
           <span class="block font-display text-[26px] leading-none font-extrabold text-coral" id="statTotal">0</span>
@@ -165,21 +165,21 @@
         <label class="toggle-row"><input type="checkbox" id="toggleBadges" /><span>Show badge spots</span></label>
       </div>
 
-      <h3 class="panel-subhead">Recently spotted</h3>
-      <ul class="seen-list" id="seenList"></ul>
+      <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Recently spotted</h3>
+      <ul id="seenList"></ul>
       <p class="rounded-[14px] bg-white p-3.5 text-sm text-[#8c88a0]" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
 
-      <h3 class="panel-subhead">Your codes</h3>
+      <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Your codes</h3>
       <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text.</p>
       <div class="flex gap-2.5">
-        <button class="pill-btn" id="copyCodesBtn">Copy code list</button>
+        <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="copyCodesBtn">Copy code list</button>
       </div>
 
-      <h3 class="panel-subhead">Backup</h3>
+      <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Backup</h3>
       <p class="mb-2.5 text-[13px] text-[#8c88a0]">Your progress lives only in this browser. Copy a backup now and then!</p>
       <div class="flex gap-2.5">
-        <button class="pill-btn" id="exportBtn">Copy backup</button>
-        <button class="pill-btn" id="importBtn">Paste backup</button>
+        <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="exportBtn">Copy backup</button>
+        <button class="flex-1 cursor-pointer rounded-full border-[2.5px] border-navy bg-white p-2.5 font-display text-[14px] font-bold text-navy active:bg-navy active:text-white" id="importBtn">Paste backup</button>
       </div>
 
       <p class="mt-[22px] mb-0.5 text-xs text-[#a09dba]" id="dataStamp"></p>

@@ -130,13 +130,14 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     for (const { id, at } of recent) {
       const item = signIndexById.get(id);
       const li = document.createElement("li");
+      li.className = "mb-2 flex cursor-pointer items-center gap-2.5 rounded-[14px] bg-white px-3.5 py-2.5 text-[14.5px] font-semibold shadow-[0_2px_8px_rgba(38,40,72,0.06)]";
       const dot = document.createElement("span");
-      dot.className = "result-dot";
+      dot.className = "size-2.5 flex-none rounded-full bg-green";
       const label = document.createElement("span");
-      label.className = "seen-label";
+      label.className = "min-w-0 flex-1 wrap-anywhere";
       label.textContent = item ? item.label : `Sign ${id}`;
       const when = document.createElement("span");
-      when.className = "seen-when";
+      when.className = "ml-auto flex-none text-[12px] font-bold text-[#a09dba]";
       when.textContent = fmtWhen(at);
       const code = store.getCode(id);
       if (code) {
