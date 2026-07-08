@@ -40,10 +40,6 @@ const MIN_PER_KM = 12; // casual walking pace
 // nothing; longer ones (paths into parks etc.) charge the round trip.
 const STUB_FREE_M = 50;
 const DEG_M = 111320; // meters per degree of latitude (and cos-corrected lon)
-const INTRO_KEY = "sg2026.routeIntro";
-// sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
-// walkthrough is underway, so a reload drops you back mid-walk.
-const WALK_KEY = "sg2026.walk";
 
 // ---------- Graph ----------
 
@@ -493,11 +489,6 @@ export interface RoutePlanner {
   hide(): void;
 }
 
-/** True when a walkthrough was left unfinished (main.ts opens the route view). */
-export function hasSavedWalk(): boolean {
-  try { return localStorage.getItem(WALK_KEY) !== null; } catch { return false; }
-}
-
 export function createRoutePlanner({ store, showToast }: { store: Store; showToast: (msg: string) => void }): RoutePlanner {
   const els = {
     view: el("routeView"),
@@ -621,13 +612,13 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   function setSeed(next: Seed) {
     seed = next;
     els.seedLabel.textContent = seed.label;
-    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+    store.setRouteIntroSeen();
     setStep("plan");
     rebuild();
   }
 
   els.introGo.addEventListener("click", () => {
-    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+    store.setRouteIntroSeen();
     setStep("start");
   });
 
@@ -1466,7 +1457,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   // route - no re-optimizing against their own seen list.
   const SHARE_LIMIT = 200;
 
-  // Serialized route (also what walk progress saves under WALK_KEY).
+  // Serialized route (also what walk progress saves via store.saveWalk).
   function routeParams(): URLSearchParams | null {
     if (!route || !graph || !seed || route.stopSigns.length > SHARE_LIMIT) return null;
     const g = graph, sd = seed;
@@ -1550,7 +1541,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.loopBack.checked = loop;
     seed = next;
     els.seedLabel.textContent = seed.label;
-    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+    store.setRouteIntroSeen();
 
     const rowFor = makeRows(g, short);
     const totals = routeTotals(g, rowFor, seed.node, stopSigns, loop);
@@ -1581,7 +1572,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // "Walk with me": step the finished route leg by leg. The drawer becomes a
   // guide card (next stop, distance, Done/Skip), the map zooms to the current
-  // leg, GPS shows where you are, and progress survives a reload via WALK_KEY.
+  // leg, GPS shows where you are, and progress survives a reload via the walk save.
 
   function legMeters(leg: number[]): number {
     if (!graph) return 0;
@@ -1712,23 +1703,21 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (!walk) return;
     const params = routeParams();
     if (!params) return; // oversized route: the walk works, it just won't survive a reload
-    try { localStorage.setItem(WALK_KEY, JSON.stringify({ q: params.toString(), at: walk.at })); } catch {}
+    store.saveWalk({ q: params.toString(), at: walk.at });
   }
 
   function clearWalkSave() {
-    try { localStorage.removeItem(WALK_KEY); } catch {}
+    store.clearSavedWalk();
   }
 
   function restoreWalk() {
-    let saved: unknown = null;
-    try { saved = JSON.parse(localStorage.getItem(WALK_KEY) ?? "null"); } catch {}
-    if (!saved || typeof saved !== "object") return;
-    const { q, at } = saved as { q?: unknown; at?: unknown };
-    if (typeof q !== "string" || typeof at !== "number" || !restoreRoute(new URLSearchParams(q))) {
+    const saved = store.savedWalk();
+    if (!saved) return;
+    if (!restoreRoute(new URLSearchParams(saved.q))) {
       clearWalkSave();
       return;
     }
-    enterWalk(at);
+    enterWalk(saved.at);
   }
 
   els.walkStart.addEventListener("click", () => enterWalk(0));
@@ -1742,9 +1731,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   sliderConfig();
   els.budgetLabel.textContent = budgetText();
 
-  let introSeen = false;
-  try { introSeen = localStorage.getItem(INTRO_KEY) === "1"; } catch {}
-  setStep(introSeen ? "start" : "intro");
+  setStep(store.routeIntroSeen() ? "start" : "intro");
 
   return {
     load,

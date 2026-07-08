@@ -4,6 +4,10 @@
 // sg2026.mysigns -> { "<id>": [lon, lat], ... } signs the user placed themselves
 // sg2026.settings -> { hideSeen, showBiz, showBadges }
 // sg2026.welcomed -> "1" once the intro modal has been dismissed
+// sg2026.routeIntro -> "1" once the route planner intro has been dismissed
+// sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
+//   walkthrough is underway, so a reload drops you back mid-walk
+// sg2026.v -> storage schema version
 
 import { manualId, newMySignId } from "./ids";
 import type { LonLat } from "./types";
@@ -14,6 +18,8 @@ const MY_SIGNS_KEY = "sg2026.mysigns";
 const SETTINGS_KEY = "sg2026.settings";
 const VERSION_KEY = "sg2026.v";
 const WELCOMED_KEY = "sg2026.welcomed";
+const ROUTE_INTRO_KEY = "sg2026.routeIntro";
+const WALK_KEY = "sg2026.walk";
 
 export interface Settings {
   hideSeen: boolean;
@@ -23,6 +29,12 @@ export interface Settings {
 
 export type SeenListener = (id: string, isSeen: boolean) => void;
 export type SettingsListener = (settings: Settings) => void;
+
+/** Walkthrough progress: the route's share params plus the next stop index. */
+export interface SavedWalk {
+  q: string;
+  at: number;
+}
 
 export interface Store {
   isSeen(id: string): boolean;
@@ -51,6 +63,12 @@ export interface Store {
   settings(): Settings;
   wasWelcomed(): boolean;
   setWelcomed(): void;
+  routeIntroSeen(): boolean;
+  setRouteIntroSeen(): void;
+  /** The unfinished walkthrough, or null if none (or the save is junk). */
+  savedWalk(): SavedWalk | null;
+  saveWalk(walk: SavedWalk): void;
+  clearSavedWalk(): void;
   onSeenChange(fn: SeenListener): void;
   onSettingsChange(fn: SettingsListener): void;
   exportJson(): string;
@@ -181,6 +199,25 @@ export function createStore(): Store {
     },
     setWelcomed() {
       try { localStorage.setItem(WELCOMED_KEY, "1"); } catch {}
+    },
+    routeIntroSeen() {
+      try { return localStorage.getItem(ROUTE_INTRO_KEY) === "1"; } catch { return false; }
+    },
+    setRouteIntroSeen() {
+      try { localStorage.setItem(ROUTE_INTRO_KEY, "1"); } catch {}
+    },
+    savedWalk() {
+      let saved: unknown = null;
+      try { saved = JSON.parse(localStorage.getItem(WALK_KEY) ?? "null"); } catch {}
+      if (!saved || typeof saved !== "object") return null;
+      const { q, at } = saved as { q?: unknown; at?: unknown };
+      return typeof q === "string" && typeof at === "number" ? { q, at } : null;
+    },
+    saveWalk(walk) {
+      writeJson(WALK_KEY, walk);
+    },
+    clearSavedWalk() {
+      try { localStorage.removeItem(WALK_KEY); } catch {}
     },
     onSeenChange(fn) { seenSubs.add(fn); },
     onSettingsChange(fn) { settingsSubs.add(fn); },
