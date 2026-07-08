@@ -158,9 +158,8 @@ async function main(): Promise<void> {
     }
   }
   for (const b of viewBtns) b.addEventListener("click", () => setView(b.dataset.view));
-  // A shared route link (#r=...) or an unfinished walkthrough opens
-  // straight into the route view.
-  if (new URLSearchParams(location.hash.slice(1)).has("r") || store.savedWalk() !== null) setView("route");
+  // Default to the route planner; Map remains available via the switch.
+  setView("route");
 
   signMap.onLoad(() => {
     signMap.addLayers({ signs, biz, badges });
