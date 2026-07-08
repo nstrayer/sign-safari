@@ -131,7 +131,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     modeDistance: el("modeDistance"),
     modeCount: el("modeCount"),
     slider: el<HTMLInputElement>("budgetSlider"),
-    budgetLabel: el("budgetLabel"),
+    budgetLabel: el<HTMLButtonElement>("budgetLabel"),
     skipSeen: el<HTMLInputElement>("skipSeen"),
     loopBack: el<HTMLInputElement>("loopBack"),
     fullSpeed: el<HTMLInputElement>("fullSpeed"),
@@ -170,6 +170,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let routePath: Path2D | null = null; // Path2D in world coords
   let race: { path: Path2D; color: string; alpha: number }[] | null = null; // [{ path, color, alpha }] while candidate routes race
   let mode: "distance" | "count" = "distance"; // or "count"
+  /** Preferred large-distance unit; persisted via store settings. */
+  let distanceUnit: DistanceUnit = store.settings().distanceUnit;
   let needsDraw = false;
 
   // Walkthrough mode: `at` indexes the next leg to walk (legs run one per
@@ -724,18 +726,71 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // ---------- Budget controls ----------
 
+  /**
+   * Convert a distance-budget slider value into meters for the optimizer.
+   *
+   * @param value - Slider value in the active display unit
+   * @returns Budget in meters
+   */
+  function budgetMeters(value: number): number {
+    return distanceUnit === 'mi' ? value * M_PER_MI : value * 1000;
+  }
+
+  /**
+   * Snap a display-unit distance onto the slider's step grid.
+   *
+   * @param value - Raw value in the active unit
+   * @returns Value clamped to the slider range and rounded to step
+   */
+  function snapDistanceBudget(value: number): number {
+    const cfg = DISTANCE_SLIDER[distanceUnit];
+    const stepped = Math.round(value / cfg.step) * cfg.step;
+    return Math.min(cfg.max, Math.max(cfg.min, stepped));
+  }
+
+  /**
+   * Apply min/max/step for the current budget mode (and distance unit).
+   * Does not rewrite the slider value.
+   */
   function sliderConfig() {
     if (mode === "distance") {
-      Object.assign(els.slider, { min: 0.5, max: 15, step: 0.5 });
-      if (+els.slider.value > 15) els.slider.value = "3";
+      const cfg = DISTANCE_SLIDER[distanceUnit];
+      Object.assign(els.slider, { min: cfg.min, max: cfg.max, step: cfg.step });
     } else {
       Object.assign(els.slider, { min: 5, max: 100, step: 5 });
       if (+els.slider.value < 5) els.slider.value = "20";
     }
   }
 
-  function budgetText() {
-    return mode === "distance" ? `${(+els.slider.value).toFixed(1)} km` : `${els.slider.value} signs`;
+  /**
+   * Label text for the budget control, including unit when in distance mode.
+   *
+   * @returns e.g. "3.0 km", "2.0 mi", or "20 signs"
+   */
+  function budgetText(): string {
+    if (mode !== "distance") return `${els.slider.value} signs`;
+    return `${(+els.slider.value).toFixed(1)} ${distanceUnit}`;
+  }
+
+  /**
+   * Refresh the budget label and its accessibility name (unit toggle hint).
+   */
+  function refreshBudgetLabel(): void {
+    const text = budgetText();
+    els.budgetLabel.textContent = text;
+    // Dotted underline signals the label is tappable only in distance mode.
+    els.budgetLabel.classList.toggle('underline', mode === 'distance');
+    if (mode === 'distance') {
+      const unitWord = distanceUnit === 'km' ? 'kilometers' : 'miles';
+      els.budgetLabel.setAttribute(
+        'aria-label',
+        `Route budget ${text.replace(distanceUnit, unitWord)}. Tap to switch units.`
+      );
+      els.budgetLabel.title = 'Tap to switch km / mi';
+    } else {
+      els.budgetLabel.setAttribute('aria-label', `Route budget ${text}`);
+      els.budgetLabel.removeAttribute('title');
+    }
   }
 
   /**
@@ -750,16 +805,50 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.modeCount.classList.toggle("is-active", mode === "count");
     const keep = els.slider.value;
     sliderConfig();
-    if (mode === "distance" && !(+keep >= 0.5 && +keep <= 15)) els.slider.value = "3";
+    if (mode === "distance") {
+      const cfg = DISTANCE_SLIDER[distanceUnit];
+      if (!(+keep >= cfg.min && +keep <= cfg.max)) els.slider.value = String(cfg.def);
+      else els.slider.value = String(snapDistanceBudget(+keep));
+    }
     if (mode === "count" && !(+keep >= 5 && +keep <= 100)) els.slider.value = "20";
-    els.budgetLabel.textContent = budgetText();
+    refreshBudgetLabel();
+  }
+
+  /**
+   * Toggle km ↔ mi, converting the current distance budget so the walk
+   * length stays roughly the same. Preference is persisted in settings.
+   */
+  function toggleDistanceUnit(): void {
+    if (mode !== "distance") return;
+    const meters = budgetMeters(+els.slider.value);
+    distanceUnit = distanceUnit === 'km' ? 'mi' : 'km';
+    store.setSetting('distanceUnit', distanceUnit);
+    sliderConfig();
+    const next =
+      distanceUnit === 'mi' ? meters / M_PER_MI : meters / 1000;
+    els.slider.value = String(snapDistanceBudget(next));
+    refreshBudgetLabel();
+    // Keep an existing route summary in the new unit without rebuilding.
+    if (route) renderResult();
+    if (walk) updateWalkCard();
   }
 
   els.modeDistance.addEventListener("click", () => setMode("distance"));
   els.modeCount.addEventListener("click", () => setMode("count"));
-  els.slider.addEventListener("input", () => { els.budgetLabel.textContent = budgetText(); });
+  els.slider.addEventListener("input", () => { refreshBudgetLabel(); });
+  els.budgetLabel.addEventListener("click", () => toggleDistanceUnit());
   els.createRoute.addEventListener("click", () => rebuild());
   store.onSeenChange(() => scheduleDraw());
+  store.onSettingsChange((s) => {
+    if (s.distanceUnit === distanceUnit) return;
+    // External settings change (rare): adopt unit and re-label without
+    // converting the slider — the other writer already chose the value.
+    distanceUnit = s.distanceUnit;
+    if (mode === "distance") sliderConfig();
+    refreshBudgetLabel();
+    if (route) renderResult();
+    if (walk) updateWalkCard();
+  });
 
   // ---------- Build + result ----------
 
@@ -878,7 +967,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
     const loop = els.loopBack.checked;
     const opts = {
-      maxMeters: mode === "distance" ? +els.slider.value * 1000 : Infinity,
+      maxMeters: mode === "distance" ? budgetMeters(+els.slider.value) : Infinity,
       maxCount: mode === "count" ? +els.slider.value : Infinity,
       excluded,
       loop,
@@ -929,7 +1018,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
       // Phase 2: declare the winner, fade the rest.
       const w = candidates[winnerIdx];
-      setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopSigns.length} signs, ${(w.totalMeters / 1000).toFixed(1)} km`);
+      setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopSigns.length} signs, ${fmtRouteKm(w.totalMeters, distanceUnit)}`);
       await pause(500);
       if (!alive()) return;
       for (let step = 0; step < 8; step++) {
@@ -991,7 +1080,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       for (const step of twoOptSteps(graph, rowFor, seed.node, stopSigns, loop)) {
         untangled = true;
         refreshRoute();
-        setStatus(`Untangling the route - pass ${step.pass}, saved ${Math.round(step.saved)} m`);
+        setStatus(`Untangling the route - pass ${step.pass}, saved ${fmtMeters(step.saved, distanceUnit)}`);
         scheduleDraw();
         await pause(90);
         if (!alive()) return;
@@ -1063,7 +1152,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (!route || !graph || !seed) return;
     const g = graph;
     const km = route.totalMeters / 1000;
-    setStatus(`${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`);
+    setStatus(`${route.stopSigns.length} signs · ${fmtRouteKm(route.totalMeters, distanceUnit)} · ~${Math.round(km * MIN_PER_KM)} min`);
     els.createRoute.hidden = false;
     setCreateRouteUi("recreate");
     els.actions.hidden = false;
@@ -1108,8 +1197,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const g = graph;
     const lonOf = (n: number) => ((g.xs[n] + g.x0) / g.kx).toFixed(6);
     const latOf = (n: number) => (g.ys[n] + g.y0).toFixed(6);
-    const km = (route.totalMeters / 1000).toFixed(1);
-    const name = `Sign Safari - ${route.stopSigns.length} signs, ${km} km`;
+    const dist = fmtRouteKm(route.totalMeters, distanceUnit);
+    const name = `Sign Safari - ${route.stopSigns.length} signs, ${dist}`;
 
     const wpts = route.stopSigns.map((si, i) => {
       const s = g.signs[si];
@@ -1285,15 +1374,15 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
     let remaining = 0;
     for (let i = walk.at; i < walk.legs.length; i++) remaining += legMeters(walk.legs[i]);
-    els.walkProgress.textContent = `${home ? "Last leg" : `Stop ${walk.at + 1} of ${n}`} · ${fmtMeters(remaining)} to go`;
+    els.walkProgress.textContent = `${home ? "Last leg" : `Stop ${walk.at + 1} of ${n}`} · ${fmtMeters(remaining, distanceUnit)} to go`;
     els.walkAddr.textContent = addr;
 
     if (herePos) {
       const dx = (graph.xs[targetNode] - herePos.x) * DEG_M;
       const dy = (graph.ys[targetNode] - herePos.y) * DEG_M;
-      els.walkDist.textContent = `${fmtMeters(Math.hypot(dx, dy))} away - head ${compassDir(dx, dy)}`;
+      els.walkDist.textContent = `${fmtMeters(Math.hypot(dx, dy), distanceUnit)} away - head ${compassDir(dx, dy)}`;
     } else {
-      els.walkDist.textContent = `about ${fmtMeters(legMeters(walk.legs[walk.at]))} along the route`;
+      els.walkDist.textContent = `about ${fmtMeters(legMeters(walk.legs[walk.at]), distanceUnit)} along the route`;
     }
 
     els.walkDone.textContent = home ? "Made it!" : "Found it!";
@@ -1422,7 +1511,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   new ResizeObserver(resize).observe(els.canvas);
   sliderConfig();
-  els.budgetLabel.textContent = budgetText();
+  if (mode === "distance") {
+    els.slider.value = String(DISTANCE_SLIDER[distanceUnit].def);
+  }
+  refreshBudgetLabel();
 
   setStep(store.routeIntroSeen() ? "start" : "intro");
 

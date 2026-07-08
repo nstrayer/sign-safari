@@ -2,7 +2,7 @@
 // sg2026.seen  -> { "<id>": <epoch seconds marked>, ... }
 // sg2026.codes -> { "<id>": "<code word from the physical sign>", ... }
 // sg2026.mysigns -> { "<id>": [lon, lat], ... } signs the user placed themselves
-// sg2026.settings -> { hideSeen, showBiz, showBadges }
+// sg2026.settings -> { hideSeen, showBiz, showBadges, distanceUnit }
 // sg2026.welcomed -> "1" once the intro modal has been dismissed
 // sg2026.routeIntro -> "1" once the route planner intro has been dismissed
 // sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
@@ -21,10 +21,14 @@ const WELCOMED_KEY = "sg2026.welcomed";
 const ROUTE_INTRO_KEY = "sg2026.routeIntro";
 const WALK_KEY = "sg2026.walk";
 
+/** Preferred display unit for walking distances in the route planner. */
+export type DistanceUnit = 'km' | 'mi';
+
 export interface Settings {
   hideSeen: boolean;
   showBiz: boolean;
   showBadges: boolean;
+  distanceUnit: DistanceUnit;
 }
 
 export type SeenListener = (id: string, isSeen: boolean) => void;
@@ -76,7 +80,27 @@ export interface Store {
   importJson(text: string): number;
 }
 
-const DEFAULT_SETTINGS: Settings = { hideSeen: false, showBiz: true, showBadges: false };
+const DEFAULT_SETTINGS: Settings = {
+  hideSeen: false,
+  showBiz: true,
+  showBadges: false,
+  distanceUnit: 'mi',
+};
+
+/**
+ * Normalize a partial settings blob from storage, dropping unknown unit values.
+ *
+ * @param raw - Parsed settings object (may be incomplete or stale)
+ * @returns Settings with defaults filled in
+ */
+function normalizeSettings(raw: Partial<Settings>): Settings {
+  const unit = raw.distanceUnit;
+  return {
+    ...DEFAULT_SETTINGS,
+    ...raw,
+    distanceUnit: unit === 'km' || unit === 'mi' ? unit : DEFAULT_SETTINGS.distanceUnit,
+  };
+}
 
 function readJson<T extends object>(key: string, fallback: T): T {
   try {
@@ -101,7 +125,7 @@ export function createStore(): Store {
   let seen = readJson<Record<string, number>>(SEEN_KEY, {});
   const codes = readJson<Record<string, string>>(CODES_KEY, {});
   const mySigns = readJson<Record<string, LonLat>>(MY_SIGNS_KEY, {});
-  let settings: Settings = { ...DEFAULT_SETTINGS, ...readJson<Partial<Settings>>(SETTINGS_KEY, {}) };
+  let settings: Settings = normalizeSettings(readJson<Partial<Settings>>(SETTINGS_KEY, {}));
   try { localStorage.setItem(VERSION_KEY, "1"); } catch {}
 
   const seenSubs = new Set<SeenListener>();
