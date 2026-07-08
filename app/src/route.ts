@@ -40,6 +40,9 @@ const MIN_PER_KM = 12; // casual walking pace
 const STUB_FREE_M = 50;
 const DEG_M = 111320; // meters per degree of latitude (and cos-corrected lon)
 const INTRO_KEY = "sg2026.routeIntro";
+// sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
+// walkthrough is underway, so a reload drops you back mid-walk.
+const WALK_KEY = "sg2026.walk";
 const PHOTON_URL = "https://photon.komoot.io/api/";
 const AREA = { lat: 42.2808, lon: -83.743, bbox: "-84.25,42.0,-83.35,42.55" };
 
@@ -462,6 +465,19 @@ function wiggleExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns:
   return added;
 }
 
+// ---------- Walkthrough helpers ----------
+
+function fmtMeters(m: number): string {
+  return m < 950 ? `${Math.max(10, Math.round(m / 10) * 10)} m` : `${(m / 1000).toFixed(1)} km`;
+}
+
+// Coarse compass direction for a world-coord delta (x east, y north).
+function compassDir(dx: number, dy: number): string {
+  const names = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+  const deg = (Math.atan2(dx, dy) * 180) / Math.PI;
+  return names[Math.round(((deg + 360) % 360) / 45) % 8];
+}
+
 // ---------- View ----------
 
 type Seed = { node: number; label: string; isSign: boolean };
@@ -476,6 +492,11 @@ export interface RoutePlanner {
   load(): Promise<void>;
   show(): void;
   hide(): void;
+}
+
+/** True when a walkthrough was left unfinished (main.ts opens the route view). */
+export function hasSavedWalk(): boolean {
+  try { return localStorage.getItem(WALK_KEY) !== null; } catch { return false; }
 }
 
 export function createRoutePlanner({ store, showToast }: { store: Store; showToast: (msg: string) => void }): RoutePlanner {
@@ -508,6 +529,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     shareRoute: el<HTMLButtonElement>("shareRoute"),
     stopsToggle: el<HTMLButtonElement>("stopsToggle"),
     stops: el("routeStops"),
+    walkStart: el<HTMLButtonElement>("walkStart"),
+    stepWalk: el("stepWalk"),
+    walkProgress: el("walkProgress"),
+    walkAddr: el("walkAddr"),
+    walkDist: el("walkDist"),
+    walkDone: el<HTMLButtonElement>("walkDone"),
+    walkSkip: el<HTMLButtonElement>("walkSkip"),
+    walkEnd: el<HTMLButtonElement>("walkEnd"),
   };
   const ctx2d = els.canvas.getContext("2d");
   if (!ctx2d) throw new Error("no 2d context");
@@ -527,6 +556,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let race: { path: Path2D; color: string; alpha: number }[] | null = null; // [{ path, color, alpha }] while candidate routes race
   let mode: "distance" | "count" = "distance"; // or "count"
   let needsDraw = false;
+
+  // Walkthrough mode: `at` indexes the next leg to walk (legs run one per
+  // stop, plus the leg home when looping, matching legsForOrder).
+  let walk: { at: number; legs: number[][] } | null = null;
+  let walkLegPath: Path2D | null = null; // current leg, drawn bold
+  let herePos: { x: number; y: number } | null = null; // GPS fix in world coords
+  let geoWatch: number | null = null;
+  let wakeLock: WakeLockSentinel | null = null;
 
   // ---------- Drawer (mobile bottom sheet; inert as a docked card on wide) ----------
 
@@ -558,16 +595,18 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   const STEP_TITLES: Record<"intro" | "start", string> = { intro: "Plan a sign run", start: "Where are you starting?" };
 
-  function setStep(step: "intro" | "start" | "plan") {
+  function setStep(step: "intro" | "start" | "plan" | "walk") {
     els.stepIntro.hidden = step !== "intro";
     els.stepStart.hidden = step !== "start";
     els.stepPlan.hidden = step !== "plan";
+    els.stepWalk.hidden = step !== "walk";
     els.hint.hidden = step === "intro";
     if (step === "start") els.hint.textContent = "You can also just tap a sign dot";
     if (step === "plan" && seed) els.hint.textContent = `Starting at ${seed.label}`;
     // Intro/start need their controls; the plan step manages the drawer
-    // itself (rebuild collapses it so the build animation gets the map).
-    if (step !== "plan") {
+    // itself (rebuild collapses it so the build animation gets the map),
+    // and the walk step keeps it open with its own title.
+    if (step === "intro" || step === "start") {
       els.drawerTitle.textContent = STEP_TITLES[step];
       setDrawer(true);
     }
@@ -576,6 +615,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   function currentStep() {
     if (!els.stepIntro.hidden) return "intro";
     if (!els.stepStart.hidden) return "start";
+    if (!els.stepWalk.hidden) return "walk";
     return "plan";
   }
 
@@ -654,8 +694,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.scale = view.fitScale;
   }
 
-  // Zoom to a set of path nodes, framed in the canvas area the card leaves free.
-  function fitToNodes(nodes: number[]) {
+  // Zoom to a set of path nodes, framed in the canvas area the card leaves
+  // free. maxZoom (in multiples of the whole-map fit) keeps short walk legs
+  // from filling the screen with a single featureless block.
+  function fitToNodes(nodes: number[], maxZoom = 200) {
     if (!graph) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const n of nodes) {
@@ -674,7 +716,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const drawerPx = els.drawer.offsetHeight;
     const availH = wide ? h - headerPx - 24 : Math.max(h - headerPx - drawerPx - 16, 120);
     const spanX = Math.max(xMax - xMin, 1e-5), spanY = Math.max(yMax - yMin, 1e-5);
-    view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * 200);
+    view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * maxZoom);
     view.cx = (xMin + xMax) / 2 + (w / 2 - availW / 2) / view.scale;
     view.cy = (yMin + yMax) / 2 + (headerPx + availH / 2 - h / 2) / view.scale;
   }
@@ -705,16 +747,16 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     });
   }
 
-  function drawBadge(sx: number, sy: number, text: string, fill: string, textFill: string) {
+  function drawBadge(sx: number, sy: number, text: string, fill: string, textFill: string, r = 10) {
     ctx.beginPath();
-    ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
     ctx.fillStyle = fill;
     ctx.fill();
     ctx.strokeStyle = "#fff";
     ctx.lineWidth = 2;
     ctx.stroke();
     ctx.fillStyle = textFill;
-    ctx.font = "700 11px 'Nunito Sans', sans-serif";
+    ctx.font = `700 ${Math.round(r * 1.1)}px 'Nunito Sans', sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, sx, sy + 0.5);
@@ -747,7 +789,15 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
       ctx.strokeStyle = COLORS.route;
+      // Walking: the full route fades back so the current leg pops.
+      if (walk) ctx.globalAlpha = 0.25;
       ctx.stroke(routePath);
+      ctx.globalAlpha = 1;
+      if (walk && walkLegPath) {
+        ctx.lineWidth = 5 / view.scale;
+        ctx.strokeStyle = COLORS.unseen;
+        ctx.stroke(walkLegPath);
+      }
     }
     ctx.restore();
 
@@ -808,25 +858,52 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       ctx.restore();
     }
 
-    // Start anchor, unless the first stop sits exactly on it.
+    // Start anchor, unless the first stop sits exactly on it. On the walk's
+    // leg home it becomes the target, so it grows and goes coral.
     if (seed) {
+      const walkingHome = !!walk && !!route && walk.at === route.stopSigns.length;
       const firstStopNode = route?.stopSigns.length ? graph.signs[route.stopSigns[0]].n : -1;
-      if (firstStopNode !== seed.node) {
+      if (firstStopNode !== seed.node || walkingHome) {
         const [sx, sy] = toScreen(graph.xs[seed.node], graph.ys[seed.node]);
-        drawBadge(sx, sy, "S", COLORS.seed, COLORS.route);
+        if (walkingHome) drawBadge(sx, sy, "S", COLORS.unseen, "#fff", 13);
+        else drawBadge(sx, sy, "S", COLORS.seed, COLORS.route);
       }
     }
 
     // Route stops: numbered, in visit order. During the build animation
-    // `shown` limits badges to the stops collected so far.
+    // `shown` limits badges to the stops collected so far. While walking,
+    // done stops turn green and the current target grows and goes coral.
     if (route) {
       const count = route.shown ?? route.stopSigns.length;
       for (let i = 0; i < count; i++) {
         const s = graph.signs[route.stopSigns[i]];
         const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
+        if (walk) {
+          // Passed stops: green if found, gray if skipped past.
+          if (i < walk.at) drawBadge(sx, sy, String(i + 1), store.isSeen(s.id) ? COLORS.seen : "#9aa0b5", "#fff");
+          else if (i === walk.at) drawBadge(sx, sy, String(i + 1), COLORS.unseen, "#fff", 13);
+          else drawBadge(sx, sy, String(i + 1), COLORS.route, "#fff");
+          continue;
+        }
         const isStart = i === 0 && s.n === seed?.node;
         drawBadge(sx, sy, String(i + 1), isStart ? COLORS.seed : COLORS.route, isStart ? COLORS.route : "#fff");
       }
+    }
+
+    // Live GPS fix while walking: a halo'd dot.
+    if (walk && herePos) {
+      const [sx, sy] = toScreen(herePos.x, herePos.y);
+      ctx.beginPath();
+      ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(91, 194, 240, 0.25)";
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(sx, sy, 7, 0, Math.PI * 2);
+      ctx.fillStyle = "#5bc2f0";
+      ctx.fill();
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
     }
   }
 
@@ -891,7 +968,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }, { passive: false });
 
   function tap(px: number, py: number) {
-    if (!graph) return;
+    if (!graph || walk) return; // mid-walk taps must not re-seed the route
     let best = -1, bestD = 22 * 22;
     for (let i = 0; i < graph.signs.length; i++) {
       const [sx, sy] = toScreen(graph.xs[graph.signs[i].n], graph.ys[graph.signs[i].n]);
@@ -1111,6 +1188,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setStatus("Measuring the streets nearby...");
     els.stops.hidden = true;
     els.actions.hidden = true;
+    els.walkStart.hidden = true;
     // The drawer stays open so the budget controls remain tweakable on
     // phones; with the stops list hidden it is short enough that the build
     // animation still gets most of the map.
@@ -1325,6 +1403,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const km = route.totalMeters / 1000;
     setStatus(`${route.stopSigns.length} signs · ${km.toFixed(1)} km · ~${Math.round(km * MIN_PER_KM)} min`);
     els.actions.hidden = false;
+    els.walkStart.hidden = false;
     els.stops.innerHTML = "";
     if (!seed.isSign) {
       const li = document.createElement("li");
@@ -1407,7 +1486,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   // route - no re-optimizing against their own seen list.
   const SHARE_LIMIT = 200;
 
-  function shareUrl(): string | null {
+  // Serialized route (also what walk progress saves under WALK_KEY).
+  function routeParams(): URLSearchParams | null {
     if (!route || !graph || !seed || route.stopSigns.length > SHARE_LIMIT) return null;
     const g = graph, sd = seed;
     const params = new URLSearchParams();
@@ -1415,7 +1495,12 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const seedSign = sd.isSign ? g.signs.find((s) => s.n === sd.node) : undefined;
     params.set("s", seedSign ? seedSign.id : `${((g.xs[sd.node] + g.x0) / g.kx).toFixed(5)},${(g.ys[sd.node] + g.y0).toFixed(5)}`);
     if (els.loopBack.checked) params.set("l", "1");
-    return `${location.origin}${location.pathname}#${params.toString()}`;
+    return params;
+  }
+
+  function shareUrl(): string | null {
+    const params = routeParams();
+    return params && `${location.origin}${location.pathname}#${params.toString()}`;
   }
 
   els.shareRoute.addEventListener("click", async () => {
@@ -1441,14 +1526,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
   });
 
-  // Rebuild a shared route from the hash once the graph is in. Stops whose
-  // ids vanished in a data refresh are dropped with a heads-up.
-  function applySharedRoute() {
-    if (!graph || !shortest) return;
+  // Rebuild a serialized route (shared link hash, or a saved walk) once the
+  // graph is in. Stops whose ids vanished in a data refresh are dropped with
+  // a heads-up. Returns whether a route landed.
+  function restoreRoute(params: URLSearchParams): boolean {
+    if (!graph || !shortest) return false;
     const g = graph, short = shortest;
-    const params = new URLSearchParams(location.hash.slice(1));
     const r = params.get("r");
-    if (!r) return;
+    if (!r) return false;
 
     const byId = new Map(g.signs.map((s, i) => [s.id, i]));
     const stopSigns: number[] = [];
@@ -1460,7 +1545,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
     if (!stopSigns.length) {
       showToast("That shared route doesn't match the current sign data.");
-      return;
+      return false;
     }
 
     const sParam = params.get("s") ?? "";
@@ -1502,7 +1587,174 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     fitToNodes(route.pathNodes);
     scheduleDraw();
     if (missing) showToast(`${missing} stop${missing > 1 ? "s" : ""} from that link no longer exist${missing > 1 ? "" : "s"}.`);
+    return true;
   }
+
+  // A shared link beats a saved walk; otherwise pick the walk back up.
+  function applySharedRoute() {
+    const params = new URLSearchParams(location.hash.slice(1));
+    if (params.has("r")) restoreRoute(params);
+    else restoreWalk();
+  }
+
+  // ---------- Walkthrough mode ----------
+
+  // "Walk with me": step the finished route leg by leg. The drawer becomes a
+  // guide card (next stop, distance, Done/Skip), the map zooms to the current
+  // leg, GPS shows where you are, and progress survives a reload via WALK_KEY.
+
+  function legMeters(leg: number[]): number {
+    if (!graph) return 0;
+    let m = 0;
+    for (let i = 1; i < leg.length; i++) {
+      m += Math.hypot(graph.xs[leg[i]] - graph.xs[leg[i - 1]], graph.ys[leg[i]] - graph.ys[leg[i - 1]]);
+    }
+    return m * DEG_M;
+  }
+
+  function updateWalkCard() {
+    if (!walk || !route || !graph || !seed) return;
+    const n = route.stopSigns.length;
+    const home = walk.at >= n; // the loop's leg back to the start
+    const targetNode = home ? seed.node : graph.signs[route.stopSigns[walk.at]].n;
+    const addr = home ? `Back to ${seed.label}` : graph.signs[route.stopSigns[walk.at]].addr;
+
+    let remaining = 0;
+    for (let i = walk.at; i < walk.legs.length; i++) remaining += legMeters(walk.legs[i]);
+    els.walkProgress.textContent = `${home ? "Last leg" : `Stop ${walk.at + 1} of ${n}`} · ${fmtMeters(remaining)} to go`;
+    els.walkAddr.textContent = addr;
+
+    if (herePos) {
+      const dx = (graph.xs[targetNode] - herePos.x) * DEG_M;
+      const dy = (graph.ys[targetNode] - herePos.y) * DEG_M;
+      els.walkDist.textContent = `${fmtMeters(Math.hypot(dx, dy))} away - head ${compassDir(dx, dy)}`;
+    } else {
+      els.walkDist.textContent = `about ${fmtMeters(legMeters(walk.legs[walk.at]))} along the route`;
+    }
+
+    els.walkDone.textContent = home ? "Made it!" : "Found it!";
+    els.walkSkip.hidden = home;
+    const title = home ? `Head back - ${addr}` : `Stop ${walk.at + 1}/${n} - ${addr}`;
+    els.drawerTitle.textContent = title;
+    els.hint.textContent = title;
+  }
+
+  function focusWalkLeg() {
+    if (!walk) return;
+    walkLegPath = pathFromNodes(walk.legs[walk.at]);
+    fitToNodes(walk.legs[walk.at], 60);
+  }
+
+  function enterWalk(at: number) {
+    if (!route || !graph || !shortest || !seed) return;
+    const legs = legsForOrder(graph, shortest, seed.node, route.stopSigns, els.loopBack.checked);
+    if (at < 0 || at >= legs.length) {
+      clearWalkSave(); // a stale save (data refresh shrank the route)
+      return;
+    }
+    walk = { at, legs };
+    setStep("walk");
+    setDrawer(true);
+    saveWalk();
+    startGeoWatch();
+    void requestWakeLock();
+    focusWalkLeg();
+    updateWalkCard();
+    scheduleDraw();
+  }
+
+  function advanceWalk(found: boolean) {
+    if (!walk || !route || !graph) return;
+    if (found && walk.at < route.stopSigns.length) {
+      const id = graph.signs[route.stopSigns[walk.at]].id;
+      if (!store.isSeen(id)) store.toggle(id);
+    }
+    walk.at++;
+    if (walk.at >= walk.legs.length) {
+      const n = route.stopSigns.length;
+      endWalk();
+      showToast(`Walk complete - ${n} stop${n === 1 ? "" : "s"}!`);
+      return;
+    }
+    saveWalk();
+    focusWalkLeg();
+    updateWalkCard();
+    scheduleDraw();
+  }
+
+  function endWalk() {
+    if (geoWatch !== null) {
+      navigator.geolocation.clearWatch(geoWatch);
+      geoWatch = null;
+    }
+    wakeLock?.release().catch(() => {});
+    wakeLock = null;
+    walk = null;
+    walkLegPath = null;
+    herePos = null;
+    clearWalkSave();
+    setStep("plan");
+    if (route) {
+      renderResult();
+      fitToNodes(route.pathNodes);
+    }
+    scheduleDraw();
+  }
+
+  function startGeoWatch() {
+    if (geoWatch !== null || !navigator.geolocation) return;
+    geoWatch = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!graph) return;
+        herePos = { x: pos.coords.longitude * graph.kx - graph.x0, y: pos.coords.latitude - graph.y0 };
+        if (walk) updateWalkCard();
+        scheduleDraw();
+      },
+      () => {}, // denied/unavailable: the card falls back to route distances
+      { enableHighAccuracy: true }
+    );
+  }
+
+  // Keep the screen on while guiding; re-request when the tab comes back
+  // (the browser releases the lock on every hide).
+  async function requestWakeLock() {
+    try {
+      wakeLock = await navigator.wakeLock.request("screen");
+    } catch {
+      // unsupported browser or battery saver; walking works fine without it
+    }
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (walk && document.visibilityState === "visible") void requestWakeLock();
+  });
+
+  function saveWalk() {
+    if (!walk) return;
+    const params = routeParams();
+    if (!params) return; // oversized route: the walk works, it just won't survive a reload
+    try { localStorage.setItem(WALK_KEY, JSON.stringify({ q: params.toString(), at: walk.at })); } catch {}
+  }
+
+  function clearWalkSave() {
+    try { localStorage.removeItem(WALK_KEY); } catch {}
+  }
+
+  function restoreWalk() {
+    let saved: unknown = null;
+    try { saved = JSON.parse(localStorage.getItem(WALK_KEY) ?? "null"); } catch {}
+    if (!saved || typeof saved !== "object") return;
+    const { q, at } = saved as { q?: unknown; at?: unknown };
+    if (typeof q !== "string" || typeof at !== "number" || !restoreRoute(new URLSearchParams(q))) {
+      clearWalkSave();
+      return;
+    }
+    enterWalk(at);
+  }
+
+  els.walkStart.addEventListener("click", () => enterWalk(0));
+  els.walkDone.addEventListener("click", () => advanceWalk(true));
+  els.walkSkip.addEventListener("click", () => advanceWalk(false));
+  els.walkEnd.addEventListener("click", endWalk);
 
   // ---------- Lifecycle ----------
 

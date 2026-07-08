@@ -7,7 +7,7 @@ import { createStore, isMySignId, type Settings } from "./store";
 import { createSignMap } from "./map";
 import { createSearch } from "./search";
 import { createUi, createWelcome, type SignIndexEntry, type Ui } from "./ui";
-import { createRoutePlanner } from "./route";
+import { createRoutePlanner, hasSavedWalk } from "./route";
 import type { Kind, LonLat, SignCollection } from "./types";
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -157,8 +157,9 @@ async function main(): Promise<void> {
     }
   }
   for (const b of viewBtns) b.addEventListener("click", () => setView(b.dataset.view));
-  // A shared route link (#r=...) opens straight into the route view.
-  if (new URLSearchParams(location.hash.slice(1)).has("r")) setView("route");
+  // A shared route link (#r=...) or an unfinished walkthrough opens
+  // straight into the route view.
+  if (new URLSearchParams(location.hash.slice(1)).has("r") || hasSavedWalk()) setView("route");
 
   signMap.onLoad(() => {
     signMap.addLayers({ signs, biz, badges });
