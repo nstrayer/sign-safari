@@ -391,6 +391,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     summary: el("routeSummary"),
     actions: el("routeActions"),
     exportGpx: el("exportGpx"),
+    shareRoute: el<HTMLButtonElement>("shareRoute"),
     stopsToggle: el<HTMLButtonElement>("stopsToggle"),
     stops: el("routeStops"),
   };
@@ -513,6 +514,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
           els.loading.hidden = true;
           fitToSigns();
           scheduleDraw();
+          applySharedRoute();
         })
         .catch((err) => {
           console.error(err);
@@ -985,6 +987,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function rebuild() {
     if (!seed || !graph) return;
+    // A rebuilt route supersedes any shared one; drop the stale link hash.
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
     const gen = ++buildGen;
     race = null;
     setBuilding(true);
@@ -1250,6 +1254,111 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     showToast("GPX saved - import it as a course/route on your watch.");
   });
+
+  // ---------- Share link ----------
+
+  // The whole route rides in the URL hash: stop order as stable sign ids
+  // (indices shift when network.json is rebuilt), the seed as a sign id or
+  // rounded lon/lat, and the loop flag. The recipient sees this exact
+  // route - no re-optimizing against their own seen list.
+  const SHARE_LIMIT = 200;
+
+  function shareUrl(): string | null {
+    if (!route || !graph || !seed || route.stopSigns.length > SHARE_LIMIT) return null;
+    const g = graph, sd = seed;
+    const params = new URLSearchParams();
+    params.set("r", route.stopSigns.map((si) => g.signs[si].id).join("."));
+    const seedSign = sd.isSign ? g.signs.find((s) => s.n === sd.node) : undefined;
+    params.set("s", seedSign ? seedSign.id : `${(g.xs[sd.node] / g.kx).toFixed(5)},${g.ys[sd.node].toFixed(5)}`);
+    if (els.loopBack.checked) params.set("l", "1");
+    return `${location.origin}${location.pathname}#${params.toString()}`;
+  }
+
+  els.shareRoute.addEventListener("click", async () => {
+    const url = shareUrl();
+    if (!url) {
+      showToast("This route is too big to fit in a link.");
+      return;
+    }
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Sign Safari route", url });
+        return;
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") return;
+        // fall through to the clipboard on NotAllowedError etc.
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast("Route link copied - send it to a friend!");
+    } catch {
+      showToast("Couldn't copy the link.");
+    }
+  });
+
+  // Rebuild a shared route from the hash once the graph is in. Stops whose
+  // ids vanished in a data refresh are dropped with a heads-up.
+  function applySharedRoute() {
+    if (!graph || !shortest) return;
+    const g = graph, short = shortest;
+    const params = new URLSearchParams(location.hash.slice(1));
+    const r = params.get("r");
+    if (!r) return;
+
+    const byId = new Map(g.signs.map((s, i) => [s.id, i]));
+    const stopSigns: number[] = [];
+    let missing = 0;
+    for (const id of r.split(".").slice(0, SHARE_LIMIT)) {
+      const idx = byId.get(id);
+      if (idx === undefined) missing++;
+      else stopSigns.push(idx);
+    }
+    if (!stopSigns.length) {
+      showToast("That shared route doesn't match the current sign data.");
+      return;
+    }
+
+    const sParam = params.get("s") ?? "";
+    let next: Seed | null = null;
+    if (sParam.includes(",")) {
+      const [lon, lat] = sParam.split(",").map(Number);
+      if (isFinite(lon) && isFinite(lat)) {
+        const { node, meters } = nearestNode(lon, lat);
+        if (meters <= 2000) next = { node, label: "shared start", isSign: false };
+      }
+    } else {
+      const idx = byId.get(sParam);
+      if (idx !== undefined) next = { node: g.signs[idx].n, label: g.signs[idx].addr, isSign: true };
+    }
+    if (!next) {
+      const first = g.signs[stopSigns[0]];
+      next = { node: first.n, label: first.addr, isSign: true };
+    }
+
+    buildGen++; // cancel any build in flight
+    const loop = params.get("l") === "1";
+    els.loopBack.checked = loop;
+    seed = next;
+    els.seedLabel.textContent = seed.label;
+    try { localStorage.setItem(INTRO_KEY, "1"); } catch {}
+
+    const rowFor = makeRows(g, short);
+    const totals = routeTotals(g, rowFor, seed.node, stopSigns, loop);
+    route = {
+      stopSigns,
+      totalMeters: totals.totalMeters,
+      pathNodes: legsForOrder(g, short, seed.node, stopSigns, loop).flat(),
+    };
+    routePath = pathFromNodes(route.pathNodes);
+    race = null;
+    setBuilding(false);
+    setStep("plan");
+    renderResult();
+    fitToNodes(route.pathNodes);
+    scheduleDraw();
+    if (missing) showToast(`${missing} stop${missing > 1 ? "s" : ""} from that link no longer exist${missing > 1 ? "" : "s"}.`);
+  }
 
   // ---------- Lifecycle ----------
 

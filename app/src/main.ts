@@ -100,6 +100,8 @@ async function main(): Promise<void> {
     }
   }
   for (const b of viewBtns) b.addEventListener("click", () => setView(b.dataset.view));
+  // A shared route link (#r=...) opens straight into the route view.
+  if (new URLSearchParams(location.hash.slice(1)).has("r")) setView("route");
 
   signMap.onLoad(() => {
     signMap.addLayers({ signs, biz, badges });
