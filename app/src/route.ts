@@ -40,6 +40,8 @@ interface Graph {
   nodeCount: number;
   edgeCount: number;
   kx: number;
+  x0: number; // world-coord center offsets; see buildGraph
+  y0: number;
   xs: Float64Array;
   ys: Float64Array;
   off: Int32Array;
@@ -54,19 +56,25 @@ function buildGraph(raw: NetworkData): Graph {
   const edgeCount = raw.edges.length / 3;
 
   // World coords: equirectangular, lon squished by cos(mid latitude) so
-  // shapes and the pinch-zoom aspect look right.
-  let latMin = Infinity, latMax = -Infinity;
+  // shapes and the pinch-zoom aspect look right. Centered near 0 because
+  // canvas rasterizers transform points in float32: raw lon*kx (~ -62)
+  // leaves so little mantissa that strokes vanish entirely at deep zoom.
+  let latMin = Infinity, latMax = -Infinity, lonMin = Infinity, lonMax = -Infinity;
   for (let i = 0; i < nodeCount; i++) {
-    const lat = raw.nodes[i * 2 + 1];
+    const lon = raw.nodes[i * 2], lat = raw.nodes[i * 2 + 1];
+    if (lon < lonMin) lonMin = lon;
+    if (lon > lonMax) lonMax = lon;
     if (lat < latMin) latMin = lat;
     if (lat > latMax) latMax = lat;
   }
   const kx = Math.cos(((latMin + latMax) / 2) * Math.PI / 180);
+  const x0 = ((lonMin + lonMax) / 2) * kx;
+  const y0 = (latMin + latMax) / 2;
   const xs = new Float64Array(nodeCount);
   const ys = new Float64Array(nodeCount);
   for (let i = 0; i < nodeCount; i++) {
-    xs[i] = raw.nodes[i * 2] * kx;
-    ys[i] = raw.nodes[i * 2 + 1];
+    xs[i] = raw.nodes[i * 2] * kx - x0;
+    ys[i] = raw.nodes[i * 2 + 1] - y0;
   }
 
   // CSR adjacency (undirected: each edge appears in both directions).
@@ -86,7 +94,7 @@ function buildGraph(raw: NetworkData): Graph {
     adj[cur[b]] = a; wt[cur[b]++] = w;
   }
 
-  return { nodeCount, edgeCount, kx, xs, ys, off, adj, wt, edges: raw.edges, signs: raw.signs };
+  return { nodeCount, edgeCount, kx, x0, y0, xs, ys, off, adj, wt, edges: raw.edges, signs: raw.signs };
 }
 
 // ---------- Dijkstra ----------
@@ -793,7 +801,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   // Nearest network node to a lon/lat, and roughly how far away it is.
   function nearestNode(lon: number, lat: number) {
     if (!graph) return { node: 0, meters: Infinity }; // unreachable pre-load guard
-    const x = lon * graph.kx, y = lat;
+    const x = lon * graph.kx - graph.x0, y = lat - graph.y0;
     let best = 0, bestD = Infinity;
     for (let i = 0; i < graph.nodeCount; i++) {
       const d = (graph.xs[i] - x) ** 2 + (graph.ys[i] - y) ** 2;
@@ -1219,8 +1227,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   els.exportGpx.addEventListener("click", () => {
     if (!route || !graph) return;
     const g = graph;
-    const lonOf = (n: number) => (g.xs[n] / g.kx).toFixed(6);
-    const latOf = (n: number) => g.ys[n].toFixed(6);
+    const lonOf = (n: number) => ((g.xs[n] + g.x0) / g.kx).toFixed(6);
+    const latOf = (n: number) => (g.ys[n] + g.y0).toFixed(6);
     const km = (route.totalMeters / 1000).toFixed(1);
     const name = `Sign Safari - ${route.stopSigns.length} signs, ${km} km`;
 
@@ -1269,7 +1277,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const params = new URLSearchParams();
     params.set("r", route.stopSigns.map((si) => g.signs[si].id).join("."));
     const seedSign = sd.isSign ? g.signs.find((s) => s.n === sd.node) : undefined;
-    params.set("s", seedSign ? seedSign.id : `${(g.xs[sd.node] / g.kx).toFixed(5)},${g.ys[sd.node].toFixed(5)}`);
+    params.set("s", seedSign ? seedSign.id : `${((g.xs[sd.node] + g.x0) / g.kx).toFixed(5)},${(g.ys[sd.node] + g.y0).toFixed(5)}`);
     if (els.loopBack.checked) params.set("l", "1");
     return `${location.origin}${location.pathname}#${params.toString()}`;
   }
