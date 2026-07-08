@@ -391,6 +391,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     summary: el("routeSummary"),
     actions: el("routeActions"),
     exportGpx: el("exportGpx"),
+    stopsToggle: el<HTMLButtonElement>("stopsToggle"),
     stops: el("routeStops"),
   };
   const ctx2d = els.canvas.getContext("2d");
@@ -555,10 +556,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const wide = matchMedia("(min-width: 720px)").matches;
     const headerPx = 100;
     const availW = wide ? w - 420 : w;
-    // Collapsed drawer height = bar + the drawer's safe-area padding;
-    // measured this way it stays right even mid collapse animation.
-    const safePad = parseFloat(getComputedStyle(els.drawer).paddingBottom) || 0;
-    const drawerPx = els.drawerBar.offsetHeight + safePad;
+    // The drawer stays open during builds now, so measure however much of
+    // it is actually showing (collapsed bar or open controls).
+    const drawerPx = els.drawer.offsetHeight;
     const availH = wide ? h - headerPx - 24 : Math.max(h - headerPx - drawerPx - 16, 120);
     const spanX = Math.max(xMax - xMin, 1e-5), spanY = Math.max(yMax - yMin, 1e-5);
     view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * 200);
@@ -994,7 +994,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setStatus("Measuring the streets nearby...");
     els.stops.hidden = true;
     els.actions.hidden = true;
-    setDrawer(false); // give the build animation the whole map (phones)
+    // The drawer stays open so the budget controls remain tweakable on
+    // phones; with the stops list hidden it is short enough that the build
+    // animation still gets most of the map.
     // Let the status paint before the synchronous Dijkstra work starts.
     setTimeout(() => runBuild(gen).catch(console.error), 30);
   }
@@ -1162,6 +1164,16 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     scheduleDraw();
   }
 
+  // The stops list folds away behind its toggle so the open drawer stays
+  // short on phones; wide screens have room, so it starts open there.
+  function setStopsOpen(open: boolean) {
+    els.stops.hidden = !open;
+    els.stopsToggle.setAttribute("aria-expanded", String(open));
+    const n = route ? route.stopSigns.length : 0;
+    els.stopsToggle.textContent = open ? "Hide stops" : `Show ${n} stop${n === 1 ? "" : "s"}`;
+  }
+  els.stopsToggle.addEventListener("click", () => setStopsOpen(els.stops.hidden));
+
   function renderResult() {
     if (!route || !graph || !seed) return;
     const g = graph;
@@ -1194,7 +1206,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       li.textContent = `Finish - back at ${seed.label}`;
       els.stops.appendChild(li);
     }
-    els.stops.hidden = false;
+    setStopsOpen(matchMedia("(min-width: 720px)").matches);
   }
 
   // ---------- GPX export ----------
