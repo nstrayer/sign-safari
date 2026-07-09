@@ -51,10 +51,16 @@ requires.)
 
 ## Refresh the sign data
 
-1. While logged in to aadl.org, download
-   https://aadl.org/summergame/map/data/SummerGame2026 and save it as
-   `summer_game_2026_raw.json` in the repo root.
-2. Rerun the converter:
+1. Fetch the latest feed (public endpoint, no AADL login required):
+
+   ```sh
+   python3 scripts/fetch_data.py
+   ```
+
+   Writes `summer_game_2026_raw.json` in the repo root from
+   https://aadl.org/summergame/map/data/SummerGame2026.
+
+2. Convert to GeoJSON:
 
    ```sh
    python3 scripts/prepare_data.py
@@ -76,8 +82,9 @@ requires.)
    `app/public/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside
    the Ann Arbor/Ypsilanti core bbox are left out of the route planner.
 
-4. Commit the refreshed `app/public/data/` files and push; the deploy
-   workflow bundles them into the published build.
+4. Commit the refreshed `app/public/data/` files (and
+   `summer_game_2026_raw.json` if you want the snapshot in git) and push;
+   the deploy workflow bundles them into the published build.
 
 ## Notes
 

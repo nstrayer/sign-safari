@@ -46,8 +46,8 @@ publishes a live map of every registered sign at
 [aadl.org/summergame/map](https://aadl.org/summergame/map).
 
 That map gets its data from a JSON feed the page loads behind the scenes.
-It's not a documented API -- just the map's own data source, which requires
-the same AADL login the map does. It lists home signs, participating
+It's not a documented API -- just the map's own data source, which is
+publicly reachable without login. It lists home signs, participating
 businesses, and badge locations; this analysis uses the home signs, which
 had **2,493 entries** when I pulled the data on July 1, 2026.
 

@@ -448,7 +448,10 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     setDataStamp(iso) {
       if (!iso) return;
       const d = new Date(iso);
-      els.dataStamp.textContent = `Sign data as of ${d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}.`;
+      const text = `Sign data as of ${d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}.`;
+      els.dataStamp.textContent = text;
+      const welcomeStamp = document.getElementById("welcomeDataStamp");
+      if (welcomeStamp) welcomeStamp.textContent = text;
     },
   };
 }

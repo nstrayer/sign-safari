@@ -235,6 +235,15 @@
       <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-green shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(67,168,96,0.35)]"></span><span>On the walk, mark each stop seen and enter the code word from the sign.</span></li>
       <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-gold shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(255,180,59,0.35)]"></span><span>Tap your progress (top right) to copy your codes and redeem at play.aadl.org.</span></li>
     </ul>
+    <h3 class="mb-1.5 font-display text-[15px] font-bold text-navy">Where the sign data comes from</h3>
+    <p class="mb-3.5 text-[12.5px] leading-[1.45] text-[#8c88a0]">
+      Sign locations come from the same JSON feed that powers the
+      <a class="font-bold text-peri" href="https://aadl.org/summergame/map" target="_blank" rel="noopener">AADL Summer Game map</a>.
+      It's not a documented public API — just the data endpoint the map loads behind the scenes.
+      This app bundles a snapshot of that feed (refreshed periodically); it does not fetch live
+      data from AADL when you use it.
+    </p>
+    <p class="mb-4 text-[12.5px] text-[#8c88a0]" id="welcomeDataStamp"></p>
     <p class="mb-4 text-[12.5px] text-[#8c88a0]">Progress is saved only in this browser. Not an official AADL app.</p>
     <button class="w-full cursor-pointer rounded-full border-none bg-coral p-3.5 font-display text-base font-bold text-white shadow-[0_4px_14px_rgba(232,112,74,0.45)] transition-transform duration-[120ms] active:scale-[0.97]" id="welcomeGo">Plan a route</button>
   </section>

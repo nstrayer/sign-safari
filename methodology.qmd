@@ -10,6 +10,7 @@ engine: jupyter
 <!--
 Skeleton document. Each section has terse bullets marking the points to
 write up; the code chunks are the runnable demonstrations. Production code:
+  - scripts/fetch_data.py     (AADL feed -> summer_game_2026_raw.json)
   - scripts/prepare_data.py  (raw AADL dump -> GeoJSON)
   - scripts/build_network.py (OSM -> docs/data/network.json)
   - docs/js/route.js         (client-side routing; ported to Python below)
@@ -42,7 +43,7 @@ C = {"street": "#c9cdd4", "sign": "#e8704a", "route": "#2f3061", "seed": "#ffb43
 
 ## Where the data comes from
 
-- Source: the AADL Summer Game map API (`aadl.org/summergame/map/data/SummerGame2026`), downloaded while logged in
+- Source: the AADL Summer Game map API (`aadl.org/summergame/map/data/SummerGame2026`), fetched via `scripts/fetch_data.py` (public endpoint, no login)
 - One JSON dump: home lawn signs, business codes, badge locations
 - Coordinates and redemption counts per sign; addresses arrive as HTML strings
 

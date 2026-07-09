@@ -4,8 +4,8 @@ copies them into docs/data/ at build time).
 
 Usage: python3 scripts/prepare_data.py
 
-To refresh data: re-download https://aadl.org/summergame/map/data/SummerGame2026
-(requires a logged-in AADL session) to summer_game_2026_raw.json, then rerun.
+To refresh data: run scripts/fetch_data.py (or download
+https://aadl.org/summergame/map/data/SummerGame2026 yourself), then rerun.
 """
 
 import json
