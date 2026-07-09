@@ -14,6 +14,8 @@
 // this module owns the DOM: canvas rendering, the wizard, and walkthrough
 // mode.
 
+import maplibregl from "maplibre-gl";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import { dataUrl } from "./data";
 import { el, svgEl } from "./dom";
 import { createGeocoder } from "./geocoder";
@@ -43,6 +45,9 @@ const COLORS = {
   route: "#2f3061",
   seed: "#ffb43b",
 };
+
+const ROUTE_BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+const ROUTE_BASEMAP_FALLBACK_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 
 /** Screen-space sign dots on the route canvas (see draw()). */
 const SIGN_DOT = {
@@ -139,6 +144,7 @@ export interface RoutePlanner {
 export function createRoutePlanner({ store, showToast }: { store: Store; showToast: (msg: string) => void }): RoutePlanner {
   const els = {
     view: el("routeView"),
+    basemap: el("routeBasemap"),
     canvas: el<HTMLCanvasElement>("routeCanvas"),
     hint: el("routeHint"),
     drawer: el("routeDrawer"),
@@ -188,6 +194,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let streetsPath: Path2D | null = null; // Path2D in world coords
   let connectorsPath: Path2D | null = null; // sign-access stubs, drawn fainter than roads
   let loadPromise: Promise<void> | null = null;
+  let basemap: MapLibreMap | null = null;
+  let basemapFailedOver = false;
 
   // View state: world center + pixels per world unit.
   const view = { cx: 0, cy: 0, scale: 1, fitScale: 1 };
@@ -357,6 +365,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.cy = (yMin + yMax) / 2;
     view.fitScale = 0.92 * Math.min(w / (xMax - xMin), h / (yMax - yMin));
     view.scale = view.fitScale;
+    syncBasemap();
   }
 
   // Zoom to a set of path nodes, framed in the canvas area the card leaves
@@ -384,9 +393,42 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * maxZoom);
     view.cx = (xMin + xMax) / 2 + (w / 2 - availW / 2) / view.scale;
     view.cy = (yMin + yMax) / 2 + (headerPx + availH / 2 - h / 2) / view.scale;
+    syncBasemap();
   }
 
   // ---------- Rendering ----------
+
+  function ensureBasemap(): void {
+    if (basemap) return;
+    basemap = new maplibregl.Map({
+      container: els.basemap,
+      style: ROUTE_BASEMAP_STYLE,
+      center: [-83.743, 42.278],
+      zoom: 12,
+      interactive: false,
+      attributionControl: { compact: true },
+    });
+    basemap.on("error", (e) => {
+      if (!basemap || basemapFailedOver || basemap.isStyleLoaded()) return;
+      if (e.error && /style/i.test(String(e.error.message))) {
+        basemapFailedOver = true;
+        basemap.setStyle(ROUTE_BASEMAP_FALLBACK_STYLE);
+      }
+    });
+  }
+
+  function syncBasemap(): void {
+    if (!graph || !basemap) return;
+    const lat = view.cy + graph.y0;
+    const lon = (view.cx + graph.x0) / graph.kx;
+    const z = Math.log2((view.scale * 360 * Math.cos(lat * Math.PI / 180)) / 512);
+    basemap.jumpTo({
+      center: [lon, lat],
+      zoom: Math.max(10, Math.min(19.7, z)),
+      bearing: 0,
+      pitch: 0,
+    });
+  }
 
   function resize() {
     const dpr = devicePixelRatio || 1;
@@ -395,6 +437,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       els.canvas.width = w * dpr;
       els.canvas.height = h * dpr;
     }
+    basemap?.resize();
+    syncBasemap();
     scheduleDraw();
   }
 
@@ -433,6 +477,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    syncBasemap();
 
     // Streets (and the route) stroke in world coordinates.
     ctx.save();
@@ -584,6 +629,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.cx += (px - w / 2) * (1 - 1 / factor) / view.scale;
     view.cy -= (py - h / 2) * (1 - 1 / factor) / view.scale;
     view.scale = next;
+    syncBasemap();
     scheduleDraw();
   }
 
@@ -601,6 +647,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (pointers.size === 1) {
       view.cx -= dx / view.scale;
       view.cy += dy / view.scale;
+      syncBasemap();
       scheduleDraw();
     } else if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
@@ -1198,6 +1245,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         view.cx = g.xs[s.n];
         view.cy = g.ys[s.n];
         view.scale = Math.max(view.scale, view.fitScale * 12);
+        syncBasemap();
         scheduleDraw();
       });
       els.stops.appendChild(li);
@@ -1547,6 +1595,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     load,
     show() {
       els.view.hidden = false;
+      ensureBasemap();
+      basemap?.resize();
+      syncBasemap();
       if (currentStep() === "start" && !seed) els.hint.textContent = "You can also just tap a sign dot";
       load().then(() => {
         resize();

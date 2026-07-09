@@ -48,6 +48,7 @@
 
   <!-- Route planner view -->
   <section class="fixed inset-0 z-20 h-dvh bg-cream" id="routeView" aria-label="Route planner">
+    <div class="route-basemap absolute inset-0" id="routeBasemap" aria-hidden="true"></div>
     <canvas class="absolute inset-0 h-full w-full cursor-grab touch-none" id="routeCanvas"></canvas>
     <div class="pointer-events-none absolute top-[calc(122px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a sign to start a route</div>
     <div class="route-drawer" id="routeDrawer">
