@@ -44,6 +44,32 @@ const COLORS = {
   seed: "#ffb43b",
 };
 
+/** Screen-space sign dots on the route canvas (see draw()). */
+const SIGN_DOT = {
+  minRadiusPx: 2.5,
+  maxRadiusPx: 7,
+  /** radius = view.scale / radiusScaleDivisor, clamped to [min, max] px */
+  radiusScaleDivisor: 2400,
+  minAlpha: 0.3,
+  alphaRange: 0.7,
+  /** Alpha ramp starts once scale exceeds fitScale × this factor. */
+  alphaZoomStart: 2.5,
+  /** fitScale multiples over which alpha ramps from minAlpha to 1. */
+  alphaZoomSpan: 4,
+} as const;
+
+/** Derived sign-dot render values for a given view scale. */
+function computeSignDotMetrics(scale: number, fitScale: number): { radiusPx: number; alpha: number } {
+  const zoomRatio = scale / fitScale;
+  const radiusPx = Math.max(
+    SIGN_DOT.minRadiusPx,
+    Math.min(SIGN_DOT.maxRadiusPx, scale / SIGN_DOT.radiusScaleDivisor),
+  );
+  const alphaProgress = Math.max(0, zoomRatio - SIGN_DOT.alphaZoomStart) / SIGN_DOT.alphaZoomSpan;
+  const alpha = Math.min(1, SIGN_DOT.minAlpha + SIGN_DOT.alphaRange * alphaProgress);
+  return { radiusPx, alpha };
+}
+
 /** Meters in one mile (international). */
 const M_PER_MI = 1609.344;
 
@@ -444,8 +470,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     // out the dots pile up, so they go translucent and fill one by one -
     // overlaps stack into a rough density map - ramping back to solid
     // (and a batched single fill) as the view zooms in.
-    const r = Math.max(2.5, Math.min(9, view.scale / 1400));
-    const dotAlpha = Math.min(1, 0.3 + 0.7 * Math.max(0, view.scale / view.fitScale - 1.2) / 4);
+    const { radiusPx: r, alpha: dotAlpha } = computeSignDotMetrics(view.scale, view.fitScale);
     const unseenPts: number[] = [];
     const seenPts: number[] = [];
     for (const s of graph.signs) {
