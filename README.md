@@ -78,8 +78,9 @@ requires.)
    ```
 
    It downloads the OpenStreetMap walking network (cached in `cache/`),
-   splits street edges at each sign's closest point on the road, and writes
-   `app/public/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside
+   splits street edges at each sign's closest point on the road, preserves
+   their OSM road shapes for map and GPX rendering, and writes
+   `app/public/data/network.json` (~1.7 MB, ~560 KB gzipped). Signs outside
    the Ann Arbor/Ypsilanti core bbox are left out of the route planner.
 
 4. Commit the refreshed `app/public/data/` files (and

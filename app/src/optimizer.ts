@@ -4,6 +4,7 @@
 // Data comes from data/network.json (built by scripts/build_network.py):
 //   nodes: [lon0, lat0, lon1, lat1, ...]
 //   edges: [a, b, meters, ...] as node indices
+//   edgeGeometryOffsets / edgeGeometryDeltas: optional compact road shapes
 //   signs: [{ id, addr, n }] where n indexes nodes
 //
 // All routing runs client-side: Dijkstra over a CSR adjacency, a greedy
@@ -16,7 +17,7 @@
 // the road, so the access stub isn't real walking (unless it's long -
 // see STUB_FREE_M).
 
-import type { NetworkData, NetworkSign } from "./types";
+import type { LonLat, NetworkData, NetworkSign } from "./types";
 
 export const MIN_PER_KM = 12; // casual walking pace
 // Access stubs at or under this read as "visible from the street" and cost
@@ -37,10 +38,25 @@ export interface Graph {
   off: Int32Array;
   adj: Int32Array;
   wt: Float32Array;
+  nodes: number[];
   edges: number[];
+  /** Edge index by unordered endpoint pair; parallel edges use the lightest. */
+  edgeByPair: Map<string, number>;
+  /** Optional compact intermediate road geometry, parallel to `edges`. */
+  edgeGeometryOffsets?: number[];
+  edgeGeometryDeltas?: number[];
   signs: NetworkSign[];
   snap: Int32Array; // per sign: the street node its access stub hangs from
   stubExtra: Float32Array; // per sign: round-trip stub charge, 0 when short
+}
+
+function edgePairKey(a: number, b: number): string {
+  return a <= b ? `${a}:${b}` : `${b}:${a}`;
+}
+
+/** Returns the serialized edge between two nodes, independent of direction. */
+export function edgeIndex(graph: Graph, from: number, to: number): number | undefined {
+  return graph.edgeByPair.get(edgePairKey(from, to));
 }
 
 export function buildGraph(raw: NetworkData): Graph {
@@ -79,12 +95,28 @@ export function buildGraph(raw: NetworkData): Graph {
   for (let i = 0; i < nodeCount; i++) off[i + 1] = off[i] + deg[i];
   const adj = new Int32Array(edgeCount * 2);
   const wt = new Float32Array(edgeCount * 2);
+  const edgeByPair = new Map<string, number>();
   const cur = off.slice(0, nodeCount);
   for (let e = 0; e < edgeCount; e++) {
     const a = raw.edges[e * 3], b = raw.edges[e * 3 + 1], w = raw.edges[e * 3 + 2];
     adj[cur[a]] = b; wt[cur[a]++] = w;
     adj[cur[b]] = a; wt[cur[b]++] = w;
+    const key = edgePairKey(a, b);
+    const existing = edgeByPair.get(key);
+    // A node-only path cannot distinguish parallel edges. Match Dijkstra's
+    // useful choice by retaining the lightest one (and the first on a tie).
+    if (existing === undefined || w < raw.edges[existing * 3 + 2]) edgeByPair.set(key, e);
   }
+
+  // Older network payloads have no geometry. Treat malformed optional data
+  // the same way so a route remains usable as straight endpoint segments.
+  const geometryIsValid = raw.edgeGeometryOffsets !== undefined &&
+    raw.edgeGeometryDeltas !== undefined &&
+    raw.edgeGeometryOffsets.length === edgeCount + 1 &&
+    raw.edgeGeometryOffsets[0] === 0 &&
+    raw.edgeGeometryOffsets[edgeCount] === raw.edgeGeometryDeltas.length;
+  const edgeGeometryOffsets = geometryIsValid ? raw.edgeGeometryOffsets : undefined;
+  const edgeGeometryDeltas = geometryIsValid ? raw.edgeGeometryDeltas : undefined;
 
   // Each sign hangs off the road as a leaf via one access stub. Route math
   // measures signs at the stub's street end (the snap node): you see a lawn
@@ -103,7 +135,76 @@ export function buildGraph(raw: NetworkData): Graph {
     }
   }
 
-  return { nodeCount, edgeCount, kx, x0, y0, xs, ys, off, adj, wt, edges: raw.edges, signs: raw.signs, snap, stubExtra };
+  return {
+    nodeCount, edgeCount, kx, x0, y0, xs, ys, off, adj, wt,
+    nodes: raw.nodes, edges: raw.edges, edgeByPair,
+    edgeGeometryOffsets, edgeGeometryDeltas,
+    signs: raw.signs, snap, stubExtra,
+  };
+}
+
+// ---------- Road geometry ----------
+
+function nodeCoordinates(graph: Graph, node: number): LonLat {
+  return [graph.nodes[node * 2], graph.nodes[node * 2 + 1]];
+}
+
+/**
+ * Decode one traversed edge into geographic coordinates. Shapes are stored
+ * in serialized edge direction, so callers can traverse either way. With no
+ * sidecar (or an empty span), this returns the two endpoint coordinates.
+ */
+export function edgeCoordinates(graph: Graph, from: number, to: number): LonLat[] {
+  const e = edgeIndex(graph, from, to);
+  if (e === undefined) return [nodeCoordinates(graph, from), nodeCoordinates(graph, to)];
+
+  const a = graph.edges[e * 3];
+  const b = graph.edges[e * 3 + 1];
+  const coordinates: LonLat[] = [nodeCoordinates(graph, a)];
+  const offsets = graph.edgeGeometryOffsets;
+  const deltas = graph.edgeGeometryDeltas;
+  if (offsets && deltas) {
+    const start = offsets[e];
+    const end = offsets[e + 1];
+    if (Number.isInteger(start) && Number.isInteger(end) &&
+        start >= 0 && end >= start && end <= deltas.length && (end - start) % 2 === 0) {
+      // The sidecar omits endpoints. Deltas accumulate from `a` in integer
+      // microdegrees so each encoded vertex remains compact and exact.
+      let lonMicro = Math.round(graph.nodes[a * 2] * 1_000_000);
+      let latMicro = Math.round(graph.nodes[a * 2 + 1] * 1_000_000);
+      for (let i = start; i < end; i += 2) {
+        lonMicro += deltas[i];
+        latMicro += deltas[i + 1];
+        coordinates.push([lonMicro / 1_000_000, latMicro / 1_000_000]);
+      }
+    }
+  }
+  coordinates.push(nodeCoordinates(graph, b));
+
+  // A self-loop has the same endpoint either way; keep its serialized shape
+  // rather than reversing it so its intermediate road geometry stays visible.
+  return a === from && b === to ? coordinates : coordinates.reverse();
+}
+
+/** Expand a street-node path into a continuous lon/lat polyline. */
+export function pathCoordinates(graph: Graph, nodes: number[]): LonLat[] {
+  if (!nodes.length) return [];
+  const coordinates = [nodeCoordinates(graph, nodes[0])];
+  for (let i = 1; i < nodes.length; i++) {
+    const edge = edgeCoordinates(graph, nodes[i - 1], nodes[i]);
+    coordinates.push(...edge.slice(1));
+  }
+  return coordinates;
+}
+
+/** Sum serialized OSM edge meters for a street-node path. */
+export function pathMeters(graph: Graph, nodes: number[]): number {
+  let meters = 0;
+  for (let i = 1; i < nodes.length; i++) {
+    const e = edgeIndex(graph, nodes[i - 1], nodes[i]);
+    if (e !== undefined) meters += graph.edges[e * 3 + 2];
+  }
+  return meters;
 }
 
 // ---------- Dijkstra ----------

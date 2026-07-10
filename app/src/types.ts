@@ -44,6 +44,13 @@ export interface NetworkData {
   generated: string;
   nodes: number[]; // [lon0, lat0, lon1, lat1, ...]
   edges: number[]; // [a, b, meters, ...] node-index triples
+  /**
+   * Optional compact road shapes, parallel to `edges`. Each edge's span in
+   * `edgeGeometryDeltas` is [offsets[e], offsets[e + 1]); values are signed
+   * microdegree lon/lat deltas for intermediate vertices only.
+   */
+  edgeGeometryOffsets?: number[];
+  edgeGeometryDeltas?: number[];
   signs: NetworkSign[];
 }
 

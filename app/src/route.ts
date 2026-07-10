@@ -32,6 +32,9 @@ import {
   legsForOrder,
   sweepOnRoute,
   wiggleExtend,
+  edgeCoordinates,
+  pathCoordinates,
+  pathMeters,
 } from "./optimizer";
 import type { Graph, Shortest } from "./optimizer";
 import type { LonLat, NetworkData, NetworkSign } from "./types";
@@ -335,8 +338,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
           for (let e = 0; e < graph.edgeCount; e++) {
             const a = graph.edges[e * 3], b = graph.edges[e * 3 + 1];
             const path = signNodes.has(a) || signNodes.has(b) ? connectorsPath : streetsPath;
-            path.moveTo(graph.xs[a], graph.ys[a]);
-            path.lineTo(graph.xs[b], graph.ys[b]);
+            appendCoordinates(path, graph, edgeCoordinates(graph, a, b), true);
           }
           els.loading.hidden = true;
           fitToSigns();
@@ -368,14 +370,15 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     syncBasemap();
   }
 
-  // Zoom to a set of path nodes, framed in the canvas area the card leaves
-  // free. maxZoom (in multiples of the whole-map fit) keeps short walk legs
-  // from filling the screen with a single featureless block.
-  function fitToNodes(nodes: number[], maxZoom = 200) {
-    if (!graph) return;
+  // Zoom to a path's full road geometry, framed in the canvas area the card
+  // leaves free. maxZoom (in multiples of the whole-map fit) keeps short walk
+  // legs from filling the screen with a single featureless block.
+  function fitToCoordinates(coordinates: LonLat[], maxZoom = 200) {
+    if (!graph || !coordinates.length) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    for (const n of nodes) {
-      const x = graph.xs[n], y = graph.ys[n];
+    for (const [lon, lat] of coordinates) {
+      const x = lon * graph.kx - graph.x0;
+      const y = lat - graph.y0;
       if (x < xMin) xMin = x; if (x > xMax) xMax = x;
       if (y < yMin) yMin = y; if (y > yMax) yMax = y;
     }
@@ -926,14 +929,51 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   let buildGen = 0;
 
+  /** Drop route-leg boundary repeats before expanding edge geometry. */
+  function compactNodePath(nodes: number[]): number[] {
+    return nodes.filter((n, i) => i === 0 || n !== nodes[i - 1]);
+  }
+
+  function compactCoordinates(coordinates: LonLat[]): LonLat[] {
+    return coordinates.filter(([lon, lat], i) =>
+      i === 0 || lon !== coordinates[i - 1][0] || lat !== coordinates[i - 1][1]
+    );
+  }
+
+  function expandedPathCoordinates(g: Graph, nodes: number[]): LonLat[] {
+    return compactCoordinates(pathCoordinates(g, compactNodePath(nodes)));
+  }
+
+  /**
+   * Add lon/lat coordinates to a world-coordinate canvas path. Consecutive
+   * duplicate coordinates are skipped, and continued legs omit their known
+   * shared first point so joins do not turn into accidental self-loops.
+   */
+  function appendCoordinates(path: Path2D, g: Graph, coordinates: LonLat[], startSubpath: boolean) {
+    let hasPoint = false;
+    let lastLon = NaN;
+    let lastLat = NaN;
+    for (const [lon, lat] of coordinates) {
+      if (hasPoint && lon === lastLon && lat === lastLat) continue;
+      lastLon = lon;
+      lastLat = lat;
+      const x = lon * g.kx - g.x0;
+      const y = lat - g.y0;
+      if (!hasPoint) {
+        hasPoint = true;
+        if (startSubpath) path.moveTo(x, y);
+        // A later leg starts where the prior one ended, so emitting its
+        // first point would produce a redundant zero-length segment.
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+  }
+
   function pathFromNodes(nodes: number[]): Path2D {
     const p = new Path2D();
     if (!graph) return p;
-    const g = graph;
-    nodes.forEach((n, i) => {
-      if (i === 0) p.moveTo(g.xs[n], g.ys[n]);
-      else p.lineTo(g.xs[n], g.ys[n]);
-    });
+    appendCoordinates(p, graph, expandedPathCoordinates(graph, nodes), true);
     return p;
   }
 
@@ -984,11 +1024,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function appendLeg(path: Path2D, leg: number[], isFirst: boolean) {
     if (!graph) return;
-    for (let k = 0; k < leg.length; k++) {
-      const n = leg[k];
-      if (isFirst && k === 0) path.moveTo(graph.xs[n], graph.ys[n]);
-      else path.lineTo(graph.xs[n], graph.ys[n]);
-    }
+    appendCoordinates(path, graph, expandedPathCoordinates(graph, leg), isFirst);
   }
 
   /**
@@ -1069,7 +1105,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
     route = null;
     routePath = null;
-    fitToNodes(candLegs.flat(2));
+    fitToCoordinates(expandedPathCoordinates(g, candLegs.flat(2)));
     scheduleDraw();
 
     if (candidates.length > 1) {
@@ -1206,7 +1242,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     refreshRoute();
     setBuilding(false);
     renderResult();
-    fitToNodes(route.pathNodes);
+    fitToCoordinates(expandedPathCoordinates(g, route.pathNodes));
     scheduleDraw();
   }
 
@@ -1277,8 +1313,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       const s = g.signs[si];
       return `  <wpt lat="${latOf(s.n)}" lon="${lonOf(s.n)}"><name>${i + 1}. ${xmlEscape(s.addr)}</name></wpt>`;
     });
-    const trkpts = route.pathNodes.map(
-      (n) => `      <trkpt lat="${latOf(n)}" lon="${lonOf(n)}"/>`
+    const trkpts = expandedPathCoordinates(g, route.pathNodes).map(
+      ([lon, lat]) => `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"/>`
     );
     const gpx = [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -1410,7 +1446,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setBuilding(false);
     setStep("plan");
     renderResult();
-    fitToNodes(route.pathNodes);
+    fitToCoordinates(expandedPathCoordinates(g, route.pathNodes));
     scheduleDraw();
     if (missing) showToast(`${missing} stop${missing > 1 ? "s" : ""} from that link no longer exist${missing > 1 ? "" : "s"}.`);
     return true;
@@ -1431,11 +1467,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function legMeters(leg: number[]): number {
     if (!graph) return 0;
-    let m = 0;
-    for (let i = 1; i < leg.length; i++) {
-      m += Math.hypot(graph.xs[leg[i]] - graph.xs[leg[i - 1]], graph.ys[leg[i]] - graph.ys[leg[i - 1]]);
-    }
-    return m * DEG_M;
+    return pathMeters(graph, compactNodePath(leg));
   }
 
   function updateWalkCard() {
@@ -1466,9 +1498,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }
 
   function focusWalkLeg() {
-    if (!walk) return;
+    if (!walk || !graph) return;
     walkLegPath = pathFromNodes(walk.legs[walk.at]);
-    fitToNodes(walk.legs[walk.at], 60);
+    fitToCoordinates(expandedPathCoordinates(graph, walk.legs[walk.at]), 60);
   }
 
   function enterWalk(at: number) {
@@ -1520,9 +1552,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     herePos = null;
     clearWalkSave();
     setStep("plan");
-    if (route) {
+    if (route && graph) {
       renderResult();
-      fitToNodes(route.pathNodes);
+      fitToCoordinates(expandedPathCoordinates(graph, route.pathNodes));
     }
     scheduleDraw();
   }
