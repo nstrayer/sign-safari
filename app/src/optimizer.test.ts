@@ -20,10 +20,14 @@ import {
   buildGraph,
   buildCandidates,
   dijkstra,
+  edgeCoordinates,
+  edgeIndex,
   greedyExtend,
   legsForOrder,
   makeDijkstraCache,
   makeRows,
+  pathCoordinates,
+  pathMeters,
   routeTotals,
   sweepOnRoute,
   twoOptSteps,
@@ -58,12 +62,37 @@ function makeNetwork(): NetworkData {
       3, 6, 10,
       2, 7, 5,
     ],
-    signs: [
-      { id: "s0", addr: "1 B St", n: 4 },
-      { id: "s1", addr: "2 C St", n: 5 },
-      { id: "s2", addr: "3 D St", n: 6 },
-      { id: "s3", addr: "4 C St", n: 7 },
+    stops: [
+      { id: "s0", addr: "1 B St", kind: "sign", n: 4 },
+      { id: "s1", addr: "2 C St", kind: "sign", n: 5 },
+      { id: "biz-2", addr: "Corner Cafe", kind: "biz", n: 6 },
+      { id: "s3", addr: "4 C St", kind: "sign", n: 7 },
     ],
+  };
+}
+
+function makeGeometryNetwork(): NetworkData {
+  return {
+    generated: "geometry-test",
+    nodes: [
+      0, 0, // 0
+      0.003, 0, // 1
+      0.004, 0, // 2
+    ],
+    edges: [
+      0, 1, 100, // curved edge
+      1, 2, 200, // deliberately straight edge (empty span)
+      2, 2, 25, // loop with a visible shape
+    ],
+    // Values are offsets into flat lon/lat delta pairs, not vertex counts.
+    edgeGeometryOffsets: [0, 4, 4, 8],
+    edgeGeometryDeltas: [
+      1000, 1000, // 0,0 -> .001,.001
+      1000, 0, // .001,.001 -> .002,.001
+      1000, 1000, // .004,0 -> .005,.001
+      -1000, 1000, // .005,.001 -> .004,.002
+    ],
+    stops: [],
   };
 }
 
@@ -77,6 +106,16 @@ function opts(over: Partial<BuildOpts> = {}): BuildOpts {
 }
 
 describe("buildGraph", () => {
+  it("keeps business-code locations as routeable stops", () => {
+    const { graph, rowFor } = setup();
+    const stops: number[] = [];
+
+    greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxCount: 4 }));
+
+    expect(graph.stops[2]).toMatchObject({ id: "biz-2", kind: "biz" });
+    expect(stops).toContain(2);
+  });
+
   it("snaps leaf signs to their street node", () => {
     const { graph } = setup();
     expect([...graph.snap]).toEqual([1, 2, 3, 2]);
@@ -87,6 +126,74 @@ describe("buildGraph", () => {
     // sign1's stub is 80 m > STUB_FREE_M, so it costs 160 m both ways.
     expect(80).toBeGreaterThan(STUB_FREE_M);
     expect([...graph.stubExtra]).toEqual([0, 160, 0, 0]);
+  });
+
+  it("keeps routing identical when optional geometry is present", () => {
+    const plain = buildGraph(makeNetwork());
+    const shapedRaw = makeNetwork();
+    shapedRaw.edgeGeometryOffsets = [0, 4, 4, 4, 4, 4, 4, 4];
+    shapedRaw.edgeGeometryDeltas = [500, 100, 500, -100];
+    const shaped = buildGraph(shapedRaw);
+
+    expect([...dijkstra(shaped, SEED).dist]).toEqual([...dijkstra(plain, SEED).dist]);
+
+    const plainRows = makeRows(plain, makeDijkstraCache(plain));
+    const shapedRows = makeRows(shaped, makeDijkstraCache(shaped));
+    const stops = [0, 1, 2];
+    expect(routeTotals(shaped, shapedRows, SEED, stops, true)).toEqual(
+      routeTotals(plain, plainRows, SEED, stops, true),
+    );
+
+    const budget = opts({ maxMeters: 250 });
+    expect(buildCandidates(shaped, shapedRows, SEED, budget)).toEqual(
+      buildCandidates(plain, plainRows, SEED, budget),
+    );
+
+    const plainStops: number[] = [];
+    const shapedStops: number[] = [];
+    greedyExtend(plain, plainRows, SEED, plainStops, 0, budget);
+    greedyExtend(shaped, shapedRows, SEED, shapedStops, 0, budget);
+    expect(shapedStops).toEqual(plainStops);
+    expect(routeTotals(shaped, shapedRows, SEED, shapedStops, false).totalMeters).toBeLessThanOrEqual(budget.maxMeters);
+  });
+});
+
+describe("road geometry", () => {
+  it("looks up an edge by either endpoint order and decodes its direction", () => {
+    const graph = buildGraph(makeGeometryNetwork());
+    expect(edgeIndex(graph, 0, 1)).toBe(0);
+    expect(edgeIndex(graph, 1, 0)).toBe(0);
+    expect(edgeCoordinates(graph, 0, 1)).toEqual([
+      [0, 0], [0.001, 0.001], [0.002, 0.001], [0.003, 0],
+    ]);
+    expect(edgeCoordinates(graph, 1, 0)).toEqual([
+      [0.003, 0], [0.002, 0.001], [0.001, 0.001], [0, 0],
+    ]);
+  });
+
+  it("falls back to endpoints for an edge with no intermediate geometry", () => {
+    const graph = buildGraph(makeGeometryNetwork());
+    expect(edgeCoordinates(graph, 1, 2)).toEqual([[0.003, 0], [0.004, 0]]);
+
+    const oldGraph = buildGraph(makeNetwork());
+    expect(edgeCoordinates(oldGraph, 0, 1)).toEqual([[0, 0], [0.001, 0]]);
+  });
+
+  it("retains a self-loop's intermediate geometry", () => {
+    const graph = buildGraph(makeGeometryNetwork());
+    expect(edgeCoordinates(graph, 2, 2)).toEqual([
+      [0.004, 0], [0.005, 0.001], [0.004, 0.002], [0.004, 0],
+    ]);
+  });
+
+  it("expands paths and sums stored edge meters rather than coordinate chords", () => {
+    const graph = buildGraph(makeGeometryNetwork());
+    expect(pathCoordinates(graph, [0, 1, 2])).toEqual([
+      [0, 0], [0.001, 0.001], [0.002, 0.001], [0.003, 0], [0.004, 0],
+    ]);
+    expect(pathMeters(graph, [0, 1, 2])).toBe(300);
+    expect(pathMeters(graph, [2, 1, 0])).toBe(300);
+    expect(pathMeters(graph, [2, 2])).toBe(25);
   });
 });
 
@@ -166,12 +273,12 @@ describe("buildCandidates", () => {
     const o = opts({ maxMeters: 800 });
     const candidates = buildCandidates(graph, rowFor, SEED, o);
     expect(candidates.length).toBeGreaterThan(0);
-    const keys = candidates.map((c) => c.stopSigns.join(","));
+    const keys = candidates.map((c) => c.stopIndices.join(","));
     expect(new Set(keys).size).toBe(keys.length);
     for (const c of candidates) {
-      expect(new Set(c.stopSigns).size).toBe(c.stopSigns.length);
+      expect(new Set(c.stopIndices).size).toBe(c.stopIndices.length);
       expect(c.totalMeters).toBeLessThanOrEqual(o.maxMeters);
-      expect(c.totalMeters).toBe(routeTotals(graph, rowFor, SEED, c.stopSigns, false).totalMeters);
+      expect(c.totalMeters).toBe(routeTotals(graph, rowFor, SEED, c.stopIndices, false).totalMeters);
     }
   });
 
@@ -180,6 +287,18 @@ describe("buildCandidates", () => {
     const a = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
     const b = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
     expect(a).toEqual(b);
+  });
+
+  it("excludes a seen business-code location from every candidate", () => {
+    const { graph, rowFor } = setup();
+    const candidates = buildCandidates(
+      graph,
+      rowFor,
+      SEED,
+      opts({ maxMeters: 800, maxCount: 4, excluded: new Set([2]) }),
+    );
+
+    expect(candidates.flatMap((candidate) => candidate.stopIndices)).not.toContain(2);
   });
 });
 

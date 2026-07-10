@@ -1,22 +1,26 @@
-// Route planner tab: network-style view of the street graph with every sign
-// as a node, plus greedy + 2-opt routing along real streets.
+// Route planner: network-style view of the street graph with every routeable
+// lawn sign and business-code location as a node, plus greedy + 2-opt routing
+// along real streets.
 //
 // Data comes from data/network.json (built by scripts/build_network.py):
 //   nodes: [lon0, lat0, lon1, lat1, ...]
 //   edges: [a, b, meters, ...] as node indices
-//   signs: [{ id, addr, n }] where n indexes nodes
+//   stops: [{ id, addr, kind, n }] where n indexes nodes
 //
 // The tab walks through a tiny wizard: pick a start (geolocation, address
-// search, or tapping a sign), pick a distance or sign-count budget, get an
+// search, or tapping a stop), pick a distance or stop-count budget, get an
 // optimized route drawn on the network plus a GPX export for watches.
 //
 // All routing runs client-side via the pure algorithm core in ./optimizer;
 // this module owns the DOM: canvas rendering, the wizard, and walkthrough
 // mode.
 
+import maplibregl from "maplibre-gl";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import { dataUrl } from "./data";
 import { el, svgEl } from "./dom";
 import { createGeocoder } from "./geocoder";
+import { restoreStopIndices } from "./route-share";
 import {
   MIN_PER_KM,
   DEG_M,
@@ -30,9 +34,12 @@ import {
   legsForOrder,
   sweepOnRoute,
   wiggleExtend,
+  edgeCoordinates,
+  pathCoordinates,
+  pathMeters,
 } from "./optimizer";
 import type { Graph, Shortest } from "./optimizer";
-import type { LonLat, NetworkData, NetworkSign } from "./types";
+import type { LonLat, NetworkData, NetworkStop } from "./types";
 import type { DistanceUnit, Store } from "./store";
 
 const COLORS = {
@@ -40,12 +47,16 @@ const COLORS = {
   connector: "#e4e2d8",
   unseen: "#e8704a",
   seen: "#43a860",
+  biz: "#5bc2f0",
   route: "#2f3061",
   seed: "#ffb43b",
 };
 
-/** Screen-space sign dots on the route canvas (see draw()). */
-const SIGN_DOT = {
+const ROUTE_BASEMAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+const ROUTE_BASEMAP_FALLBACK_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+
+/** Screen-space route-stop dots on the route canvas (see draw()). */
+const STOP_DOT = {
   minRadiusPx: 2.5,
   maxRadiusPx: 7,
   /** radius = view.scale / radiusScaleDivisor, clamped to [min, max] px */
@@ -58,15 +69,15 @@ const SIGN_DOT = {
   alphaZoomSpan: 4,
 } as const;
 
-/** Derived sign-dot render values for a given view scale. */
-function computeSignDotMetrics(scale: number, fitScale: number): { radiusPx: number; alpha: number } {
+/** Derived route-stop render values for a given view scale. */
+function computeStopDotMetrics(scale: number, fitScale: number): { radiusPx: number; alpha: number } {
   const zoomRatio = scale / fitScale;
   const radiusPx = Math.max(
-    SIGN_DOT.minRadiusPx,
-    Math.min(SIGN_DOT.maxRadiusPx, scale / SIGN_DOT.radiusScaleDivisor),
+    STOP_DOT.minRadiusPx,
+    Math.min(STOP_DOT.maxRadiusPx, scale / STOP_DOT.radiusScaleDivisor),
   );
-  const alphaProgress = Math.max(0, zoomRatio - SIGN_DOT.alphaZoomStart) / SIGN_DOT.alphaZoomSpan;
-  const alpha = Math.min(1, SIGN_DOT.minAlpha + SIGN_DOT.alphaRange * alphaProgress);
+  const alphaProgress = Math.max(0, zoomRatio - STOP_DOT.alphaZoomStart) / STOP_DOT.alphaZoomSpan;
+  const alpha = Math.min(1, STOP_DOT.minAlpha + STOP_DOT.alphaRange * alphaProgress);
   return { radiusPx, alpha };
 }
 
@@ -113,6 +124,10 @@ function fmtRouteKm(m: number, unit: DistanceUnit): string {
   return `${(m / 1000).toFixed(1)} km`;
 }
 
+function stopKindLabel(stop: NetworkStop): string {
+  return stop.kind === "biz" ? "Business code" : "Lawn sign";
+}
+
 // Coarse compass direction for a world-coord delta (x east, y north).
 function compassDir(dx: number, dy: number): string {
   const names = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
@@ -122,13 +137,13 @@ function compassDir(dx: number, dy: number): string {
 
 // ---------- View ----------
 
-type Seed = { node: number; label: string; isSign: boolean };
-type ActiveRoute = { stopSigns: number[]; totalMeters: number; pathNodes: number[]; shown?: number };
+type Seed = { node: number; label: string; isStop: boolean };
+type ActiveRoute = { stopIndices: number[]; totalMeters: number; pathNodes: number[]; shown?: number };
 
-// Address-search result rows: either a sign match or a geocoded place.
+// Address-search result rows: either a route-stop match or a geocoded place.
 type AddrItem =
-  | { label: string; sub?: string; sign: NetworkSign; coords?: undefined }
-  | { label: string; sub?: string; sign?: undefined; coords: LonLat };
+  | { label: string; sub?: string; stop: NetworkStop; coords?: undefined }
+  | { label: string; sub?: string; stop?: undefined; coords: LonLat };
 
 export interface RoutePlanner {
   load(): Promise<void>;
@@ -139,6 +154,7 @@ export interface RoutePlanner {
 export function createRoutePlanner({ store, showToast }: { store: Store; showToast: (msg: string) => void }): RoutePlanner {
   const els = {
     view: el("routeView"),
+    basemap: el("routeBasemap"),
     canvas: el<HTMLCanvasElement>("routeCanvas"),
     hint: el("routeHint"),
     drawer: el("routeDrawer"),
@@ -175,8 +191,13 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     walkProgress: el("walkProgress"),
     walkAddr: el("walkAddr"),
     walkDist: el("walkDist"),
+    walkActions: el("walkActions"),
     walkDone: el<HTMLButtonElement>("walkDone"),
     walkSkip: el<HTMLButtonElement>("walkSkip"),
+    walkCodeEntry: el("walkCodeEntry"),
+    walkCodeInput: el<HTMLInputElement>("walkCodeInput"),
+    walkCodeSave: el<HTMLButtonElement>("walkCodeSave"),
+    walkCodeSkip: el<HTMLButtonElement>("walkCodeSkip"),
     walkEnd: el<HTMLButtonElement>("walkEnd"),
   };
   const ctx2d = els.canvas.getContext("2d");
@@ -186,12 +207,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let graph: Graph | null = null;
   let shortest: Shortest | null = null;
   let streetsPath: Path2D | null = null; // Path2D in world coords
-  let connectorsPath: Path2D | null = null; // sign-access stubs, drawn fainter than roads
+  let connectorsPath: Path2D | null = null; // location-access stubs, drawn fainter than roads
   let loadPromise: Promise<void> | null = null;
+  let basemap: MapLibreMap | null = null;
+  let basemapFailedOver = false;
 
   // View state: world center + pixels per world unit.
   const view = { cx: 0, cy: 0, scale: 1, fitScale: 1 };
-  let seed: Seed | null = null; // { node, label, isSign }
+  let seed: Seed | null = null; // { node, label, isStop }
   let route: ActiveRoute | null = null;
   let routePath: Path2D | null = null; // Path2D in world coords
   let race: { path: Path2D; color: string; alpha: number }[] | null = null; // [{ path, color, alpha }] while candidate routes race
@@ -203,6 +226,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   // Walkthrough mode: `at` indexes the next leg to walk (legs run one per
   // stop, plus the leg home when looping, matching legsForOrder).
   let walk: { at: number; legs: number[][] } | null = null;
+  let enteringCode = false;
   let walkLegPath: Path2D | null = null; // current leg, drawn bold
   let herePos: { x: number; y: number } | null = null; // GPS fix in world coords
   let geoWatch: number | null = null;
@@ -236,7 +260,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // ---------- Wizard steps ----------
 
-  const STEP_TITLES: Record<"intro" | "start", string> = { intro: "Plan a sign run", start: "Where are you starting?" };
+  const STEP_TITLES: Record<"intro" | "start", string> = { intro: "Plan a route", start: "Where are you starting?" };
 
   function setStep(step: "intro" | "start" | "plan" | "walk") {
     els.stepIntro.hidden = step !== "intro";
@@ -244,7 +268,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     els.stepPlan.hidden = step !== "plan";
     els.stepWalk.hidden = step !== "walk";
     els.hint.hidden = step === "intro";
-    if (step === "start") els.hint.textContent = "You can also just tap a sign dot";
+    if (step === "start") els.hint.textContent = "You can also just tap a route stop";
     if (step === "plan" && seed) els.hint.textContent = `Starting at ${seed.label}`;
     // Intro/start need their controls; the plan step manages the drawer
     // itself (rebuild collapses it so the build animation gets the map),
@@ -318,20 +342,19 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         .then((raw) => {
           graph = buildGraph(raw);
           shortest = makeDijkstraCache(graph);
-          // Sign nodes are leaves hanging off the road network via short
+          // Route-stop nodes are leaves hanging off the road network via short
           // access edges (see build_network.py); split those out so they
           // don't read as streets.
-          const signNodes = new Set(graph.signs.map((s) => s.n));
+          const stopNodes = new Set(graph.stops.map((stop) => stop.n));
           streetsPath = new Path2D();
           connectorsPath = new Path2D();
           for (let e = 0; e < graph.edgeCount; e++) {
             const a = graph.edges[e * 3], b = graph.edges[e * 3 + 1];
-            const path = signNodes.has(a) || signNodes.has(b) ? connectorsPath : streetsPath;
-            path.moveTo(graph.xs[a], graph.ys[a]);
-            path.lineTo(graph.xs[b], graph.ys[b]);
+            const path = stopNodes.has(a) || stopNodes.has(b) ? connectorsPath : streetsPath;
+            appendCoordinates(path, graph, edgeCoordinates(graph, a, b), true);
           }
           els.loading.hidden = true;
-          fitToSigns();
+          fitToStops();
           scheduleDraw();
           applySharedRoute();
         })
@@ -343,11 +366,11 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     return loadPromise;
   }
 
-  function fitToSigns() {
+  function fitToStops() {
     if (!graph) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    for (const s of graph.signs) {
-      const x = graph.xs[s.n], y = graph.ys[s.n];
+    for (const stop of graph.stops) {
+      const x = graph.xs[stop.n], y = graph.ys[stop.n];
       if (x < xMin) xMin = x; if (x > xMax) xMax = x;
       if (y < yMin) yMin = y; if (y > yMax) yMax = y;
     }
@@ -357,16 +380,18 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.cy = (yMin + yMax) / 2;
     view.fitScale = 0.92 * Math.min(w / (xMax - xMin), h / (yMax - yMin));
     view.scale = view.fitScale;
+    syncBasemap();
   }
 
-  // Zoom to a set of path nodes, framed in the canvas area the card leaves
-  // free. maxZoom (in multiples of the whole-map fit) keeps short walk legs
-  // from filling the screen with a single featureless block.
-  function fitToNodes(nodes: number[], maxZoom = 200) {
-    if (!graph) return;
+  // Zoom to a path's full road geometry, framed in the canvas area the card
+  // leaves free. maxZoom (in multiples of the whole-map fit) keeps short walk
+  // legs from filling the screen with a single featureless block.
+  function fitToCoordinates(coordinates: LonLat[], maxZoom = 200) {
+    if (!graph || !coordinates.length) return;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
-    for (const n of nodes) {
-      const x = graph.xs[n], y = graph.ys[n];
+    for (const [lon, lat] of coordinates) {
+      const x = lon * graph.kx - graph.x0;
+      const y = lat - graph.y0;
       if (x < xMin) xMin = x; if (x > xMax) xMax = x;
       if (y < yMin) yMin = y; if (y > yMax) yMax = y;
     }
@@ -384,9 +409,42 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.scale = Math.min(0.85 * Math.min(availW / spanX, availH / spanY), view.fitScale * maxZoom);
     view.cx = (xMin + xMax) / 2 + (w / 2 - availW / 2) / view.scale;
     view.cy = (yMin + yMax) / 2 + (headerPx + availH / 2 - h / 2) / view.scale;
+    syncBasemap();
   }
 
   // ---------- Rendering ----------
+
+  function ensureBasemap(): void {
+    if (basemap) return;
+    basemap = new maplibregl.Map({
+      container: els.basemap,
+      style: ROUTE_BASEMAP_STYLE,
+      center: [-83.743, 42.278],
+      zoom: 12,
+      interactive: false,
+      attributionControl: { compact: true },
+    });
+    basemap.on("error", (e) => {
+      if (!basemap || basemapFailedOver || basemap.isStyleLoaded()) return;
+      if (e.error && /style/i.test(String(e.error.message))) {
+        basemapFailedOver = true;
+        basemap.setStyle(ROUTE_BASEMAP_FALLBACK_STYLE);
+      }
+    });
+  }
+
+  function syncBasemap(): void {
+    if (!graph || !basemap) return;
+    const lat = view.cy + graph.y0;
+    const lon = (view.cx + graph.x0) / graph.kx;
+    const z = Math.log2((view.scale * 360 * Math.cos(lat * Math.PI / 180)) / 512);
+    basemap.jumpTo({
+      center: [lon, lat],
+      zoom: Math.max(10, Math.min(19.7, z)),
+      bearing: 0,
+      pitch: 0,
+    });
+  }
 
   function resize() {
     const dpr = devicePixelRatio || 1;
@@ -395,6 +453,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       els.canvas.width = w * dpr;
       els.canvas.height = h * dpr;
     }
+    basemap?.resize();
+    syncBasemap();
     scheduleDraw();
   }
 
@@ -433,6 +493,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const w = els.canvas.clientWidth, h = els.canvas.clientHeight;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
+    syncBasemap();
 
     // Streets (and the route) stroke in world coordinates.
     ctx.save();
@@ -466,17 +527,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
     ctx.restore();
 
-    // Signs in screen space so dot sizes stay honest across zooms. Zoomed
+    // Route stops in screen space so dot sizes stay honest across zooms. Zoomed
     // out the dots pile up, so they go translucent and fill one by one -
     // overlaps stack into a rough density map - ramping back to solid
     // (and a batched single fill) as the view zooms in.
-    const { radiusPx: r, alpha: dotAlpha } = computeSignDotMetrics(view.scale, view.fitScale);
-    const unseenPts: number[] = [];
+    const { radiusPx: r, alpha: dotAlpha } = computeStopDotMetrics(view.scale, view.fitScale);
+    const unseenSignPts: number[] = [];
+    const unseenBusinessPts: number[] = [];
     const seenPts: number[] = [];
-    for (const s of graph.signs) {
-      const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
+    for (const stop of graph.stops) {
+      const [sx, sy] = toScreen(graph.xs[stop.n], graph.ys[stop.n]);
       if (sx < -20 || sy < -20 || sx > w + 20 || sy > h + 20) continue;
-      (store.isSeen(s.id) ? seenPts : unseenPts).push(sx, sy);
+      if (store.isSeen(stop.id)) seenPts.push(sx, sy);
+      else if (stop.kind === "biz") unseenBusinessPts.push(sx, sy);
+      else unseenSignPts.push(sx, sy);
     }
     const fillDots = (pts: number[], color: string) => {
       ctx.fillStyle = color;
@@ -498,7 +562,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       }
     };
     fillDots(seenPts, COLORS.seen);
-    fillDots(unseenPts, COLORS.unseen);
+    fillDots(unseenBusinessPts, COLORS.biz);
+    fillDots(unseenSignPts, COLORS.unseen);
 
     // Racing candidate routes go above the dots, dashed differently per
     // candidate so overlapping stretches stay tellable-apart.
@@ -525,8 +590,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     // Start anchor, unless the first stop sits exactly on it. On the walk's
     // leg home it becomes the target, so it grows and goes coral.
     if (seed) {
-      const walkingHome = !!walk && !!route && walk.at === route.stopSigns.length;
-      const firstStopNode = route?.stopSigns.length ? graph.signs[route.stopSigns[0]].n : -1;
+      const walkingHome = !!walk && !!route && walk.at === route.stopIndices.length;
+      const firstStopNode = route?.stopIndices.length ? graph.stops[route.stopIndices[0]].n : -1;
       if (firstStopNode !== seed.node || walkingHome) {
         const [sx, sy] = toScreen(graph.xs[seed.node], graph.ys[seed.node]);
         if (walkingHome) drawBadge(sx, sy, "S", COLORS.unseen, "#fff", 13);
@@ -538,18 +603,18 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     // `shown` limits badges to the stops collected so far. While walking,
     // done stops turn green and the current target grows and goes coral.
     if (route) {
-      const count = route.shown ?? route.stopSigns.length;
+      const count = route.shown ?? route.stopIndices.length;
       for (let i = 0; i < count; i++) {
-        const s = graph.signs[route.stopSigns[i]];
-        const [sx, sy] = toScreen(graph.xs[s.n], graph.ys[s.n]);
+        const stop = graph.stops[route.stopIndices[i]];
+        const [sx, sy] = toScreen(graph.xs[stop.n], graph.ys[stop.n]);
         if (walk) {
           // Passed stops: green if found, gray if skipped past.
-          if (i < walk.at) drawBadge(sx, sy, String(i + 1), store.isSeen(s.id) ? COLORS.seen : "#9aa0b5", "#fff");
+          if (i < walk.at) drawBadge(sx, sy, String(i + 1), store.isSeen(stop.id) ? COLORS.seen : "#9aa0b5", "#fff");
           else if (i === walk.at) drawBadge(sx, sy, String(i + 1), COLORS.unseen, "#fff", 13);
           else drawBadge(sx, sy, String(i + 1), COLORS.route, "#fff");
           continue;
         }
-        const isStart = i === 0 && s.n === seed?.node;
+        const isStart = i === 0 && stop.n === seed?.node;
         drawBadge(sx, sy, String(i + 1), isStart ? COLORS.seed : COLORS.route, isStart ? COLORS.route : "#fff");
       }
     }
@@ -584,6 +649,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     view.cx += (px - w / 2) * (1 - 1 / factor) / view.scale;
     view.cy -= (py - h / 2) * (1 - 1 / factor) / view.scale;
     view.scale = next;
+    syncBasemap();
     scheduleDraw();
   }
 
@@ -601,6 +667,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (pointers.size === 1) {
       view.cx -= dx / view.scale;
       view.cy += dy / view.scale;
+      syncBasemap();
       scheduleDraw();
     } else if (pointers.size === 2) {
       const [a, b] = [...pointers.values()];
@@ -634,14 +701,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   function tap(px: number, py: number) {
     if (!graph || walk) return; // mid-walk taps must not re-seed the route
     let best = -1, bestD = 22 * 22;
-    for (let i = 0; i < graph.signs.length; i++) {
-      const [sx, sy] = toScreen(graph.xs[graph.signs[i].n], graph.ys[graph.signs[i].n]);
+    for (let i = 0; i < graph.stops.length; i++) {
+      const [sx, sy] = toScreen(graph.xs[graph.stops[i].n], graph.ys[graph.stops[i].n]);
       const d = (sx - px) ** 2 + (sy - py) ** 2;
       if (d < bestD) { bestD = d; best = i; }
     }
     if (best >= 0) {
-      const s = graph.signs[best];
-      setSeed({ node: s.n, label: s.addr, isSign: true });
+      const stop = graph.stops[best];
+      setSeed({ node: stop.n, label: stop.addr, isStop: true });
     }
   }
 
@@ -665,7 +732,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       showToast("That spot is outside the mapped street network.");
       return;
     }
-    setSeed({ node, label, isSign: false });
+    setSeed({ node, label, isStop: false });
   }
 
   els.useLocation.addEventListener("click", () => {
@@ -692,8 +759,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     );
   });
 
-  // Address search: instant matches over sign addresses, Photon places after
-  // a pause (same service and area bias as the map tab's search).
+  // Address search: instant matches over route-stop addresses, Photon places
+  // after a pause (same service and area bias as Explore search).
   const geocoder = createGeocoder({
     limit: 4,
     currentQuery: () => els.addrInput.value.trim(),
@@ -715,7 +782,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       li.addEventListener("click", () => {
         els.addrResults.hidden = true;
         els.addrInput.value = "";
-        if (item.sign) setSeed({ node: item.sign.n, label: item.sign.addr, isSign: true });
+        if (item.stop) setSeed({ node: item.stop.n, label: item.stop.addr, isStop: true });
         else seedFromCoords(item.coords[0], item.coords[1], item.label);
       });
       els.addrResults.appendChild(li);
@@ -727,9 +794,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const nq = q.toLowerCase();
     const out: AddrItem[] = [];
     if (!graph) return out;
-    for (const s of graph.signs) {
-      if (s.addr.toLowerCase().includes(nq)) {
-        out.push({ label: s.addr, sub: "sign", sign: s });
+    for (const stop of graph.stops) {
+      if (stop.addr.toLowerCase().includes(nq)) {
+        out.push({ label: stop.addr, sub: stopKindLabel(stop), stop });
         if (out.length >= 4) break;
       }
     }
@@ -790,10 +857,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   /**
    * Label text for the budget control, including unit when in distance mode.
    *
-   * @returns e.g. "3.0 km", "2.0 mi", or "20 signs"
+   * @returns e.g. "3.0 km", "2.0 mi", or "20 stops"
    */
   function budgetText(): string {
-    if (mode !== "distance") return `${els.slider.value} signs`;
+    if (mode !== "distance") return `${els.slider.value} stops`;
     return `${(+els.slider.value).toFixed(1)} ${distanceUnit}`;
   }
 
@@ -819,7 +886,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }
 
   /**
-   * Switch between distance and sign-count budgets. Does not rebuild; the
+   * Switch between distance and stop-count budgets. Does not rebuild; the
    * user confirms with Create route.
    *
    * @param next - Budget mode to activate
@@ -879,14 +946,51 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   let buildGen = 0;
 
+  /** Drop route-leg boundary repeats before expanding edge geometry. */
+  function compactNodePath(nodes: number[]): number[] {
+    return nodes.filter((n, i) => i === 0 || n !== nodes[i - 1]);
+  }
+
+  function compactCoordinates(coordinates: LonLat[]): LonLat[] {
+    return coordinates.filter(([lon, lat], i) =>
+      i === 0 || lon !== coordinates[i - 1][0] || lat !== coordinates[i - 1][1]
+    );
+  }
+
+  function expandedPathCoordinates(g: Graph, nodes: number[]): LonLat[] {
+    return compactCoordinates(pathCoordinates(g, compactNodePath(nodes)));
+  }
+
+  /**
+   * Add lon/lat coordinates to a world-coordinate canvas path. Consecutive
+   * duplicate coordinates are skipped, and continued legs omit their known
+   * shared first point so joins do not turn into accidental self-loops.
+   */
+  function appendCoordinates(path: Path2D, g: Graph, coordinates: LonLat[], startSubpath: boolean) {
+    let hasPoint = false;
+    let lastLon = NaN;
+    let lastLat = NaN;
+    for (const [lon, lat] of coordinates) {
+      if (hasPoint && lon === lastLon && lat === lastLat) continue;
+      lastLon = lon;
+      lastLat = lat;
+      const x = lon * g.kx - g.x0;
+      const y = lat - g.y0;
+      if (!hasPoint) {
+        hasPoint = true;
+        if (startSubpath) path.moveTo(x, y);
+        // A later leg starts where the prior one ended, so emitting its
+        // first point would produce a redundant zero-length segment.
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+  }
+
   function pathFromNodes(nodes: number[]): Path2D {
     const p = new Path2D();
     if (!graph) return p;
-    const g = graph;
-    nodes.forEach((n, i) => {
-      if (i === 0) p.moveTo(g.xs[n], g.ys[n]);
-      else p.lineTo(g.xs[n], g.ys[n]);
-    });
+    appendCoordinates(p, graph, expandedPathCoordinates(graph, nodes), true);
     return p;
   }
 
@@ -937,11 +1041,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function appendLeg(path: Path2D, leg: number[], isFirst: boolean) {
     if (!graph) return;
-    for (let k = 0; k < leg.length; k++) {
-      const n = leg[k];
-      if (isFirst && k === 0) path.moveTo(graph.xs[n], graph.ys[n]);
-      else path.lineTo(graph.xs[n], graph.ys[n]);
-    }
+    appendCoordinates(path, graph, expandedPathCoordinates(graph, leg), isFirst);
   }
 
   /**
@@ -971,7 +1071,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // The narrated build: race a few greedy starts against each other, keep
   // the winner, watch 2-opt untangle it, then spend any budget the
-  // optimizer freed up on extra signs.
+  // optimizer freed up on extra stops.
   async function runBuild(gen: number) {
     const alive = () => gen === buildGen && !!seed && !!graph;
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -986,8 +1086,8 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
     const excluded = new Set<number>();
     if (els.skipSeen.checked) {
-      for (let i = 0; i < graph.signs.length; i++) {
-        if (store.isSeen(graph.signs[i].id)) excluded.add(i);
+      for (let i = 0; i < graph.stops.length; i++) {
+        if (store.isSeen(graph.stops[i].id)) excluded.add(i);
       }
     }
     const loop = els.loopBack.checked;
@@ -1002,27 +1102,27 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (!alive()) return;
     if (!candidates.length) {
       setBuilding(false);
-      setStatus("No reachable signs fit that budget - loosen it or pick another start.");
+      setStatus("No reachable stops fit that budget - loosen it or pick another start.");
       route = null;
       routePath = null;
       scheduleDraw();
       return;
     }
 
-    // More signs wins; fewer meters breaks ties.
+    // More stops wins; fewer meters breaks ties.
     let winnerIdx = 0;
     for (let i = 1; i < candidates.length; i++) {
       const c = candidates[i], w = candidates[winnerIdx];
-      if (c.stopSigns.length > w.stopSigns.length ||
-          (c.stopSigns.length === w.stopSigns.length && c.totalMeters < w.totalMeters)) {
+      if (c.stopIndices.length > w.stopIndices.length ||
+          (c.stopIndices.length === w.stopIndices.length && c.totalMeters < w.totalMeters)) {
         winnerIdx = i;
       }
     }
-    const candLegs = candidates.map((c) => legsForOrder(g, short, seedNode, c.stopSigns, loop));
+    const candLegs = candidates.map((c) => legsForOrder(g, short, seedNode, c.stopIndices, loop));
 
     route = null;
     routePath = null;
-    fitToNodes(candLegs.flat(2));
+    fitToCoordinates(expandedPathCoordinates(g, candLegs.flat(2)));
     scheduleDraw();
 
     if (candidates.length > 1) {
@@ -1043,7 +1143,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
       // Phase 2: declare the winner, fade the rest.
       const w = candidates[winnerIdx];
-      setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopSigns.length} signs, ${fmtRouteKm(w.totalMeters, distanceUnit)}`);
+      setStatus(`Route ${String.fromCharCode(65 + winnerIdx)} wins - ${w.stopIndices.length} stops, ${fmtRouteKm(w.totalMeters, distanceUnit)}`);
       await pause(500);
       if (!alive()) return;
       for (let step = 0; step < 8; step++) {
@@ -1054,7 +1154,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       }
       race = null;
       route = {
-        stopSigns: candidates[winnerIdx].stopSigns,
+        stopIndices: candidates[winnerIdx].stopIndices,
         totalMeters: candidates[winnerIdx].totalMeters,
         pathNodes: candLegs[winnerIdx].flat(),
       };
@@ -1064,18 +1164,18 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       if (!alive()) return;
     } else {
       // Single viable start: reveal it leg by leg instead.
-      const stopSigns = candidates[0].stopSigns;
+      const stopIndices = candidates[0].stopIndices;
       const legs = candLegs[0];
-      route = { stopSigns, totalMeters: candidates[0].totalMeters, pathNodes: legs.flat(), shown: 0 };
+      route = { stopIndices, totalMeters: candidates[0].totalMeters, pathNodes: legs.flat(), shown: 0 };
       routePath = new Path2D();
       const revealDelay = Math.min(120, Math.max(30, 1500 / legs.length));
       for (let i = 0; i < legs.length; i++) {
         appendLeg(routePath, legs[i], i === 0);
-        route.shown = Math.min(i + 1, stopSigns.length);
+        route.shown = Math.min(i + 1, stopIndices.length);
         setStatus(
           loop && i === legs.length - 1
             ? "...and back to the start"
-            : `Collecting signs... ${i + 1} of ${stopSigns.length}`
+            : `Collecting stops... ${i + 1} of ${stopIndices.length}`
         );
         scheduleDraw();
         await pause(revealDelay);
@@ -1085,13 +1185,13 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
 
     // Phase 3+4, repeated: untangle with 2-opt, then spend whatever budget
-    // the optimizer freed up on more signs, until neither helps.
-    const stopSigns = route.stopSigns;
+    // the optimizer freed up on more stops, until neither helps.
+    const stopIndices = route.stopIndices;
     const rt = route;
     const refreshRoute = () => {
-      const totals = routeTotals(g, rowFor, seedNode, stopSigns, loop);
+      const totals = routeTotals(g, rowFor, seedNode, stopIndices, loop);
       rt.totalMeters = totals.totalMeters;
-      rt.pathNodes = legsForOrder(g, short, seedNode, stopSigns, loop).flat();
+      rt.pathNodes = legsForOrder(g, short, seedNode, stopIndices, loop).flat();
       routePath = pathFromNodes(rt.pathNodes);
       return totals;
     };
@@ -1102,7 +1202,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
     for (let round = 1; round <= 3; round++) {
       let untangled = false;
-      for (const step of twoOptSteps(graph, rowFor, seed.node, stopSigns, loop)) {
+      for (const step of twoOptSteps(graph, rowFor, seed.node, stopIndices, loop)) {
         untangled = true;
         refreshRoute();
         setStatus(`Untangling the route - pass ${step.pass}, saved ${fmtMeters(step.saved, distanceUnit)}`);
@@ -1119,37 +1219,37 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
       if (mode !== "distance") break;
       const totals = refreshRoute();
-      const added = greedyExtend(graph, rowFor, seed.node, stopSigns, totals.pathMeters, opts);
+      const added = greedyExtend(graph, rowFor, seed.node, stopIndices, totals.pathMeters, opts);
       if (!added) break;
       refreshRoute();
-      setStatus(`Leftover budget - adding ${added} more sign${added > 1 ? "s" : ""}...`);
+      setStatus(`Leftover budget - adding ${added} more stop${added > 1 ? "s" : ""}...`);
       scheduleDraw();
       await pause(700);
       if (!alive()) return;
     }
 
-    // Signs the walk already passes ride along free.
-    const swept = sweepOnRoute(g, short, seedNode, stopSigns, excluded, loop);
+    // Stops the walk already passes ride along free.
+    const swept = sweepOnRoute(g, short, seedNode, stopIndices, excluded, loop);
     if (swept) {
       refreshRoute();
-      setStatus(`Scooping up ${swept} sign${swept > 1 ? "s" : ""} already on the way...`);
+      setStatus(`Scooping up ${swept} stop${swept > 1 ? "s" : ""} already on the way...`);
       scheduleDraw();
       await pause(700);
       if (!alive()) return;
     }
 
-    // Stretch: run a little over budget when short detours buy more signs.
+    // Stretch: run a little over budget when short detours buy more stops.
     if (mode === "distance") {
       const slack = Math.min(opts.maxMeters * 0.1, 1000);
-      const stretched = wiggleExtend(g, rowFor, seedNode, stopSigns, opts, slack);
+      const stretched = wiggleExtend(g, rowFor, seedNode, stopIndices, opts, slack);
       if (stretched) {
         // Quietly re-untangle, then grab anything the reshuffled path passes.
-        const cleanup = twoOptSteps(g, rowFor, seedNode, stopSigns, loop);
+        const cleanup = twoOptSteps(g, rowFor, seedNode, stopIndices, loop);
         while (!cleanup.next().done) { /* drain */ }
-        const bonus = sweepOnRoute(g, short, seedNode, stopSigns, excluded, loop);
+        const bonus = sweepOnRoute(g, short, seedNode, stopIndices, excluded, loop);
         refreshRoute();
         const n = stretched + bonus;
-        setStatus(`Stretching a bit for ${n} more sign${n > 1 ? "s" : ""}...`);
+        setStatus(`Stretching a bit for ${n} more stop${n > 1 ? "s" : ""}...`);
         scheduleDraw();
         await pause(700);
         if (!alive()) return;
@@ -1159,7 +1259,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     refreshRoute();
     setBuilding(false);
     renderResult();
-    fitToNodes(route.pathNodes);
+    fitToCoordinates(expandedPathCoordinates(g, route.pathNodes));
     scheduleDraw();
   }
 
@@ -1168,7 +1268,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   function setStopsOpen(open: boolean) {
     els.stops.hidden = !open;
     els.stopsToggle.setAttribute("aria-expanded", String(open));
-    const n = route ? route.stopSigns.length : 0;
+    const n = route ? route.stopIndices.length : 0;
     els.stopsToggle.textContent = open ? "Hide stops" : `Show ${n} stop${n === 1 ? "" : "s"}`;
   }
   els.stopsToggle.addEventListener("click", () => setStopsOpen(els.stops.hidden));
@@ -1177,27 +1277,34 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     if (!route || !graph || !seed) return;
     const g = graph;
     const km = route.totalMeters / 1000;
-    setStatus(`${route.stopSigns.length} signs · ${fmtRouteKm(route.totalMeters, distanceUnit)} · ~${Math.round(km * MIN_PER_KM)} min`);
+    setStatus(`${route.stopIndices.length} stops · ${fmtRouteKm(route.totalMeters, distanceUnit)} · ~${Math.round(km * MIN_PER_KM)} min`);
     els.createRoute.hidden = false;
     setCreateRouteUi("recreate");
     els.actions.hidden = false;
     els.walkStart.hidden = false;
     els.stops.innerHTML = "";
-    if (!seed.isSign) {
+    if (!seed.isStop) {
       const li = document.createElement("li");
       li.className = "stop-start";
       li.textContent = `Start - ${seed.label}`;
       els.stops.appendChild(li);
     }
-    for (const si of route.stopSigns) {
-      const s = graph.signs[si];
+    for (const si of route.stopIndices) {
+      const stop = graph.stops[si];
       const li = document.createElement("li");
-      li.textContent = s.addr;
-      if (store.isSeen(s.id)) li.classList.add("stop-seen");
+      li.textContent = stop.addr;
+      if (stop.kind === "biz") {
+        const type = document.createElement("span");
+        type.className = "block text-[11px] font-bold tracking-[0.45px] text-blue uppercase";
+        type.textContent = "Business code";
+        li.appendChild(type);
+      }
+      if (store.isSeen(stop.id)) li.classList.add("stop-seen");
       li.addEventListener("click", () => {
-        view.cx = g.xs[s.n];
-        view.cy = g.ys[s.n];
+        view.cx = g.xs[stop.n];
+        view.cy = g.ys[stop.n];
         view.scale = Math.max(view.scale, view.fitScale * 12);
+        syncBasemap();
         scheduleDraw();
       });
       els.stops.appendChild(li);
@@ -1223,14 +1330,14 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const lonOf = (n: number) => ((g.xs[n] + g.x0) / g.kx).toFixed(6);
     const latOf = (n: number) => (g.ys[n] + g.y0).toFixed(6);
     const dist = fmtRouteKm(route.totalMeters, distanceUnit);
-    const name = `Sign Safari - ${route.stopSigns.length} signs, ${dist}`;
+    const name = `Sign Safari - ${route.stopIndices.length} stops, ${dist}`;
 
-    const wpts = route.stopSigns.map((si, i) => {
-      const s = g.signs[si];
-      return `  <wpt lat="${latOf(s.n)}" lon="${lonOf(s.n)}"><name>${i + 1}. ${xmlEscape(s.addr)}</name></wpt>`;
+    const wpts = route.stopIndices.map((si, i) => {
+      const stop = g.stops[si];
+      return `  <wpt lat="${latOf(stop.n)}" lon="${lonOf(stop.n)}"><name>${i + 1}. ${xmlEscape(stop.addr)}</name></wpt>`;
     });
-    const trkpts = route.pathNodes.map(
-      (n) => `      <trkpt lat="${latOf(n)}" lon="${lonOf(n)}"/>`
+    const trkpts = expandedPathCoordinates(g, route.pathNodes).map(
+      ([lon, lat]) => `      <trkpt lat="${lat.toFixed(6)}" lon="${lon.toFixed(6)}"/>`
     );
     const gpx = [
       '<?xml version="1.0" encoding="UTF-8"?>',
@@ -1250,7 +1357,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const blob = new Blob([gpx], { type: "application/gpx+xml" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `sign-safari-${route.stopSigns.length}-signs.gpx`;
+    a.download = `sign-safari-${route.stopIndices.length}-stops.gpx`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
     showToast("GPX saved - import it as a course/route on your watch.");
@@ -1258,20 +1365,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   // ---------- Share link ----------
 
-  // The whole route rides in the URL hash: stop order as stable sign ids
-  // (indices shift when network.json is rebuilt), the seed as a sign id or
+  // The whole route rides in the URL hash: stop order as stable location ids
+  // (indices shift when network.json is rebuilt), the seed as a stop id or
   // rounded lon/lat, and the loop flag. The recipient sees this exact
   // route - no re-optimizing against their own seen list.
   const SHARE_LIMIT = 200;
 
   // Serialized route (also what walk progress saves via store.saveWalk).
   function routeParams(): URLSearchParams | null {
-    if (!route || !graph || !seed || route.stopSigns.length > SHARE_LIMIT) return null;
+    if (!route || !graph || !seed || route.stopIndices.length > SHARE_LIMIT) return null;
     const g = graph, sd = seed;
     const params = new URLSearchParams();
-    params.set("r", route.stopSigns.map((si) => g.signs[si].id).join("."));
-    const seedSign = sd.isSign ? g.signs.find((s) => s.n === sd.node) : undefined;
-    params.set("s", seedSign ? seedSign.id : `${((g.xs[sd.node] + g.x0) / g.kx).toFixed(5)},${(g.ys[sd.node] + g.y0).toFixed(5)}`);
+    params.set("r", route.stopIndices.map((si) => g.stops[si].id).join("."));
+    const seedStop = sd.isStop ? g.stops.find((s) => s.n === sd.node) : undefined;
+    params.set("s", seedStop ? seedStop.id : `${((g.xs[sd.node] + g.x0) / g.kx).toFixed(5)},${(g.ys[sd.node] + g.y0).toFixed(5)}`);
     if (els.loopBack.checked) params.set("l", "1");
     return params;
   }
@@ -1313,16 +1420,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const r = params.get("r");
     if (!r) return false;
 
-    const byId = new Map(g.signs.map((s, i) => [s.id, i]));
-    const stopSigns: number[] = [];
-    let missing = 0;
-    for (const id of r.split(".").slice(0, SHARE_LIMIT)) {
-      const idx = byId.get(id);
-      if (idx === undefined) missing++;
-      else stopSigns.push(idx);
-    }
-    if (!stopSigns.length) {
-      showToast("That shared route doesn't match the current sign data.");
+    const { stopIndices, missing } = restoreStopIndices(g.stops, r.split(".").slice(0, SHARE_LIMIT));
+    const byId = new Map(g.stops.map((stop, index) => [stop.id, index]));
+    if (!stopIndices.length) {
+      showToast("That shared route doesn't match the current location data.");
       return false;
     }
 
@@ -1332,15 +1433,15 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       const [lon, lat] = sParam.split(",").map(Number);
       if (isFinite(lon) && isFinite(lat)) {
         const { node, meters } = nearestNode(lon, lat);
-        if (meters <= 2000) next = { node, label: "shared start", isSign: false };
+        if (meters <= 2000) next = { node, label: "shared start", isStop: false };
       }
     } else {
       const idx = byId.get(sParam);
-      if (idx !== undefined) next = { node: g.signs[idx].n, label: g.signs[idx].addr, isSign: true };
+      if (idx !== undefined) next = { node: g.stops[idx].n, label: g.stops[idx].addr, isStop: true };
     }
     if (!next) {
-      const first = g.signs[stopSigns[0]];
-      next = { node: first.n, label: first.addr, isSign: true };
+      const first = g.stops[stopIndices[0]];
+      next = { node: first.n, label: first.addr, isStop: true };
     }
 
     buildGen++; // cancel any build in flight
@@ -1351,18 +1452,18 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     store.setRouteIntroSeen();
 
     const rowFor = makeRows(g, short);
-    const totals = routeTotals(g, rowFor, seed.node, stopSigns, loop);
+    const totals = routeTotals(g, rowFor, seed.node, stopIndices, loop);
     route = {
-      stopSigns,
+      stopIndices,
       totalMeters: totals.totalMeters,
-      pathNodes: legsForOrder(g, short, seed.node, stopSigns, loop).flat(),
+      pathNodes: legsForOrder(g, short, seed.node, stopIndices, loop).flat(),
     };
     routePath = pathFromNodes(route.pathNodes);
     race = null;
     setBuilding(false);
     setStep("plan");
     renderResult();
-    fitToNodes(route.pathNodes);
+    fitToCoordinates(expandedPathCoordinates(g, route.pathNodes));
     scheduleDraw();
     if (missing) showToast(`${missing} stop${missing > 1 ? "s" : ""} from that link no longer exist${missing > 1 ? "" : "s"}.`);
     return true;
@@ -1383,24 +1484,21 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function legMeters(leg: number[]): number {
     if (!graph) return 0;
-    let m = 0;
-    for (let i = 1; i < leg.length; i++) {
-      m += Math.hypot(graph.xs[leg[i]] - graph.xs[leg[i - 1]], graph.ys[leg[i]] - graph.ys[leg[i - 1]]);
-    }
-    return m * DEG_M;
+    return pathMeters(graph, compactNodePath(leg));
   }
 
   function updateWalkCard() {
     if (!walk || !route || !graph || !seed) return;
-    const n = route.stopSigns.length;
+    const n = route.stopIndices.length;
     const home = walk.at >= n; // the loop's leg back to the start
-    const targetNode = home ? seed.node : graph.signs[route.stopSigns[walk.at]].n;
-    const addr = home ? `Back to ${seed.label}` : graph.signs[route.stopSigns[walk.at]].addr;
+    const stop = home ? undefined : graph.stops[route.stopIndices[walk.at]];
+    const targetNode = stop?.n ?? seed.node;
+    const addr = stop?.addr ?? `Back to ${seed.label}`;
 
     let remaining = 0;
     for (let i = walk.at; i < walk.legs.length; i++) remaining += legMeters(walk.legs[i]);
     els.walkProgress.textContent = `${home ? "Last leg" : `Stop ${walk.at + 1} of ${n}`} · ${fmtMeters(remaining, distanceUnit)} to go`;
-    els.walkAddr.textContent = addr;
+    els.walkAddr.textContent = stop ? `${stopKindLabel(stop)} · ${addr}` : addr;
 
     if (herePos) {
       const dx = (graph.xs[targetNode] - herePos.x) * DEG_M;
@@ -1408,6 +1506,17 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       els.walkDist.textContent = `${fmtMeters(Math.hypot(dx, dy), distanceUnit)} away - head ${compassDir(dx, dy)}`;
     } else {
       els.walkDist.textContent = `about ${fmtMeters(legMeters(walk.legs[walk.at]), distanceUnit)} along the route`;
+    }
+
+    els.walkActions.hidden = enteringCode;
+    els.walkCodeEntry.hidden = !enteringCode;
+    if (enteringCode) {
+      const title = `Stop ${walk.at + 1}/${n} found - add its code`;
+      els.walkProgress.textContent = `Stop ${walk.at + 1} of ${n} found`;
+      els.walkDist.textContent = "Save the code word now, or skip it and keep walking.";
+      els.drawerTitle.textContent = title;
+      els.hint.textContent = title;
+      return;
     }
 
     els.walkDone.textContent = home ? "Made it!" : "Found it!";
@@ -1418,19 +1527,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }
 
   function focusWalkLeg() {
-    if (!walk) return;
+    if (!walk || !graph) return;
     walkLegPath = pathFromNodes(walk.legs[walk.at]);
-    fitToNodes(walk.legs[walk.at], 60);
+    fitToCoordinates(expandedPathCoordinates(graph, walk.legs[walk.at]), 60);
   }
 
   function enterWalk(at: number) {
     if (!route || !graph || !shortest || !seed) return;
-    const legs = legsForOrder(graph, shortest, seed.node, route.stopSigns, els.loopBack.checked);
+    const legs = legsForOrder(graph, shortest, seed.node, route.stopIndices, els.loopBack.checked);
     if (at < 0 || at >= legs.length) {
       clearWalkSave(); // a stale save (data refresh shrank the route)
       return;
     }
     walk = { at, legs };
+    enteringCode = false;
     setStep("walk");
     setDrawer(true);
     saveWalk();
@@ -1441,15 +1551,31 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     scheduleDraw();
   }
 
-  function advanceWalk(found: boolean) {
+  function beginCodeEntry() {
     if (!walk || !route || !graph) return;
-    if (found && walk.at < route.stopSigns.length) {
-      const id = graph.signs[route.stopSigns[walk.at]].id;
-      if (!store.isSeen(id)) store.toggle(id);
-    }
+    const stop = graph.stops[route.stopIndices[walk.at]];
+    if (!store.isSeen(stop.id)) store.toggle(stop.id);
+    enteringCode = true;
+    els.walkCodeInput.value = store.getCode(stop.id);
+    updateWalkCard();
+    els.walkCodeInput.focus();
+    scheduleDraw();
+  }
+
+  function finishCodeEntry(saveCode: boolean) {
+    if (!walk || !route || !graph || !enteringCode) return;
+    const stop = graph.stops[route.stopIndices[walk.at]];
+    if (saveCode) store.setCode(stop.id, els.walkCodeInput.value);
+    enteringCode = false;
+    els.walkCodeInput.value = "";
+    advanceWalk();
+  }
+
+  function advanceWalk() {
+    if (!walk || !route || !graph) return;
     walk.at++;
     if (walk.at >= walk.legs.length) {
-      const n = route.stopSigns.length;
+      const n = route.stopIndices.length;
       endWalk();
       showToast(`Walk complete - ${n} stop${n === 1 ? "" : "s"}!`);
       return;
@@ -1468,13 +1594,16 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     wakeLock?.release().catch(() => {});
     wakeLock = null;
     walk = null;
+    enteringCode = false;
+    els.walkCodeEntry.hidden = true;
+    els.walkActions.hidden = false;
     walkLegPath = null;
     herePos = null;
     clearWalkSave();
     setStep("plan");
-    if (route) {
+    if (route && graph) {
       renderResult();
-      fitToNodes(route.pathNodes);
+      fitToCoordinates(expandedPathCoordinates(graph, route.pathNodes));
     }
     scheduleDraw();
   }
@@ -1528,8 +1657,19 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   }
 
   els.walkStart.addEventListener("click", () => enterWalk(0));
-  els.walkDone.addEventListener("click", () => advanceWalk(true));
-  els.walkSkip.addEventListener("click", () => advanceWalk(false));
+  els.walkDone.addEventListener("click", () => {
+    if (!walk || !route || walk.at >= route.stopIndices.length) {
+      advanceWalk();
+      return;
+    }
+    beginCodeEntry();
+  });
+  els.walkSkip.addEventListener("click", advanceWalk);
+  els.walkCodeSave.addEventListener("click", () => finishCodeEntry(true));
+  els.walkCodeSkip.addEventListener("click", () => finishCodeEntry(false));
+  els.walkCodeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") finishCodeEntry(true);
+  });
   els.walkEnd.addEventListener("click", endWalk);
 
   // ---------- Lifecycle ----------
@@ -1547,7 +1687,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     load,
     show() {
       els.view.hidden = false;
-      if (currentStep() === "start" && !seed) els.hint.textContent = "You can also just tap a sign dot";
+      ensureBasemap();
+      basemap?.resize();
+      syncBasemap();
+      if (currentStep() === "start" && !seed) els.hint.textContent = "You can also just tap a route stop";
       load().then(() => {
         resize();
         scheduleDraw();

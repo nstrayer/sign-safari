@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   });
   search.buildIndex(collections);
 
-  // Route planner tab. The street network only loads when first opened.
+  // Route mode's street network only loads when first opened.
   const routePlanner = createRoutePlanner({ store, showToast: (msg) => ui.showToast(msg) });
   const viewBtns = document.querySelectorAll<HTMLButtonElement>(".view-btn");
   function setView(view: string | undefined): void {
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     }
   }
   for (const b of viewBtns) b.addEventListener("click", () => setView(b.dataset.view));
-  // Default to the route planner; Map remains available via the switch.
+  // Default to Route; Explore remains available via the switch.
   setView("route");
 
   signMap.onLoad(() => {
@@ -167,9 +167,7 @@ async function main(): Promise<void> {
     syncMySigns();
 
     const applySettings = (s: Settings): void => {
-      signMap.setLayerVisible("biz-pts", s.showBiz);
-      signMap.setLayerVisible("badge-pts", s.showBadges);
-      signMap.setHideSeen(s.hideSeen);
+      signMap.setHeatmapVisible(s.showHeatmap);
     };
     applySettings(store.settings());
     store.onSettingsChange(applySettings);
@@ -185,6 +183,6 @@ main().catch((err: unknown) => {
   console.error(err);
   document.body.insertAdjacentHTML(
     "beforeend",
-    '<div style="position:fixed;inset:0;display:grid;place-items:center;background:#fff8ee;z-index:99;font-family:sans-serif;padding:24px;text-align:center;">Could not load sign data. Check your connection and refresh.</div>'
+    '<div style="position:fixed;inset:0;display:grid;place-items:center;background:#fff8ee;z-index:99;font-family:sans-serif;padding:24px;text-align:center;">Could not load location data. Check your connection and refresh.</div>'
   );
 });

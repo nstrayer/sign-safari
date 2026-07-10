@@ -3,6 +3,7 @@
 // boundary where it enters; everything past that point typechecks for real.
 
 export type Kind = "sign" | "biz" | "badge";
+export type RouteStopKind = Extract<Kind, "sign" | "biz">;
 
 export type LonLat = [number, number];
 
@@ -44,12 +45,21 @@ export interface NetworkData {
   generated: string;
   nodes: number[]; // [lon0, lat0, lon1, lat1, ...]
   edges: number[]; // [a, b, meters, ...] node-index triples
-  signs: NetworkSign[];
+  /**
+   * Optional compact road shapes, parallel to `edges`. Each edge's span in
+   * `edgeGeometryDeltas` is [offsets[e], offsets[e + 1]); values are signed
+   * microdegree lon/lat deltas for intermediate vertices only.
+   */
+  edgeGeometryOffsets?: number[];
+  edgeGeometryDeltas?: number[];
+  stops: NetworkStop[];
 }
 
-export interface NetworkSign {
+/** A published lawn sign or business-code location that can appear in a route. */
+export interface NetworkStop {
   id: string;
   addr: string;
+  kind: RouteStopKind;
   n: number; // index into nodes
 }
 

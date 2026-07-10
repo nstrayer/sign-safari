@@ -3,7 +3,6 @@
 import maplibregl from "maplibre-gl";
 import type {
   ExpressionSpecification,
-  FilterSpecification,
   Map as MapLibreMap,
   MapGeoJSONFeature,
   PointLike,
@@ -40,8 +39,7 @@ export interface SignMap {
   setMySigns(signs: { id: string; coords: LonLat }[]): void;
   setSeen(id: string, isSeen: boolean): void;
   applySeen(ids: string[]): void;
-  setHideSeen(hide: boolean): void;
-  setLayerVisible(layerId: string, visible: boolean): void;
+  setHeatmapVisible(visible: boolean): void;
   flyTo(coords: LonLat, zoom?: number): void;
   /** True if coords fall inside the map's panning bounds. */
   inBounds(coords: LonLat): boolean;
@@ -120,23 +118,6 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
 
   const seenExpr: ExpressionSpecification = ["boolean", ["feature-state", "seen"], false];
 
-  // MapLibre limitation: feature-state drives paint (the seen color) but
-  // cannot drive layer filters, so hide-seen rebuilds literal id-list filters
-  // from this internal copy of the seen set, which setSeen/applySeen maintain.
-  const seenSet = new Set<string>();
-  let hideSeen = false;
-
-  function refreshSeenFilters(): void {
-    const seenIds = [...seenSet];
-    const homeIds = seenIds.filter((id) => !isBizId(id));
-    const bizIds = seenIds.filter(isBizId);
-    const filterFor = (ids: string[]): FilterSpecification | undefined =>
-      hideSeen && ids.length ? ["!", ["in", ["get", "id"], ["literal", ids]]] : undefined;
-    map.setFilter("signs-pts", filterFor(homeIds));
-    map.setFilter("signs-heat", filterFor(homeIds));
-    map.setFilter("biz-pts", filterFor(bizIds));
-  }
-
   function addLayers({ signs, biz, badges }: { signs: SignCollection; biz: SignCollection; badges: SignCollection }): void {
     map.addSource("signs", { type: "geojson", data: signs, promoteId: "id" });
     map.addSource("biz", { type: "geojson", data: biz, promoteId: "id" });
@@ -194,7 +175,6 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
       id: "badge-pts",
       type: "circle",
       source: "badges",
-      layout: { visibility: "none" },
       paint: {
         "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 5, 17, 12],
         "circle-color": COLORS.badge,
@@ -255,21 +235,15 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
     onLoad(fn) { map.on("load", fn); },
     addLayers,
     setSeen(id, isSeen) {
-      if (isSeen) seenSet.add(id);
-      else seenSet.delete(id);
       map.setFeatureState({ source: sourceFor(id), id }, { seen: isSeen });
-      if (hideSeen) refreshSeenFilters();
     },
     applySeen(ids) {
       for (const id of ids) {
-        seenSet.add(id);
         map.setFeatureState({ source: sourceFor(id), id }, { seen: true });
       }
-      if (hideSeen) refreshSeenFilters();
     },
-    setHideSeen(hide) {
-      hideSeen = hide;
-      refreshSeenFilters();
+    setHeatmapVisible(visible) {
+      map.setLayoutProperty("signs-heat", "visibility", visible ? "visible" : "none");
     },
     setMySigns(signs) {
       // Before addLayers has run (style still loading) there is nothing to
@@ -286,9 +260,6 @@ export function createSignMap({ container, onFeatureTap, onMapTap, onAddSignTap 
         })),
       });
       for (const { id } of signs) this.setSeen(id, true);
-    },
-    setLayerVisible(layerId, visible) {
-      map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
     },
     flyTo(coords, zoom = 16.5) {
       map.flyTo({ center: coords, zoom, essential: true });

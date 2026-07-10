@@ -1,20 +1,23 @@
-# Sign Safari - Ann Arbor Summer Game 2026 Sign Map
+# Sign Safari - Ann Arbor Summer Game 2026 Route and Explore Map
 
 **Live at https://nickstrayer.me/sign-safari/** (GitHub Pages, deployed by
 the `Deploy to GitHub Pages` workflow on every push to `main`).
 
-A static web app showing a heat map of AADL Summer Game 2026 lawn signs, with
-address/GPS search and personal "seen it" tracking stored in localStorage.
-Each sign's card also takes the code word printed on the physical sign; the
+A static web app for exploring AADL Summer Game 2026 lawn signs and business
+code locations, with address/GPS search and personal "seen it" tracking stored
+in localStorage. Each location's card also takes its code word; the
 progress panel's "Copy code list" button exports all collected codes for
 redeeming at play.aadl.org. No backend server.
 
-The Route tab plans walking routes along real streets: start from your
-location, a searched address, or any tapped sign, pick a distance or
-sign-count budget, and it greedily collects nearby signs and 2-opts the
-visiting order (`app/src/route.ts`, all client-side over the prebuilt street
-network in `app/public/data/network.json`). Routes export as GPX (waypoints
-per stop + the full track) for Garmin/Apple Watch/Strava.
+Route plans walking routes along real streets: start from your location, a
+searched address, or any tapped route stop, pick a distance or stop-count
+budget, and it greedily collects nearby lawn signs and business-code
+locations, then 2-opts the visiting order (`app/src/route.ts`, all
+client-side over the prebuilt street network in
+`app/public/data/network.json`). Explore is the free-form map for browsing,
+searching, tracking, and finding density with its optional heatmap. Routes
+export as GPX (waypoints per stop + the full track) for Garmin/Apple
+Watch/Strava.
 
 ## Layout
 
@@ -49,7 +52,7 @@ GitHub Pages uses at `/sign-safari/`. (Must be served over http, not opened
 as a file; localhost counts as a secure context, which the geolocate button
 requires.)
 
-## Refresh the sign data
+## Refresh the location data
 
 1. Fetch the latest feed (public endpoint, no AADL login required):
 
@@ -78,9 +81,12 @@ requires.)
    ```
 
    It downloads the OpenStreetMap walking network (cached in `cache/`),
-   splits street edges at each sign's closest point on the road, and writes
-   `app/public/data/network.json` (~0.9 MB, ~280 KB gzipped). Signs outside
-   the Ann Arbor/Ypsilanti core bbox are left out of the route planner.
+   splits street edges at each lawn sign or business-code location's closest
+   point on the road, preserves
+   their OSM road shapes for map and GPX rendering, and writes
+   `app/public/data/network.json` (~1.7 MB, ~560 KB gzipped). Locations
+   outside the Ann Arbor/Ypsilanti core bbox are left out of the route
+   planner.
 
 4. Commit the refreshed `app/public/data/` files (and
    `summer_game_2026_raw.json` if you want the snapshot in git) and push;
@@ -90,8 +96,8 @@ requires.)
 
 - Basemap: OpenFreeMap Positron (keyless). A CARTO fallback style URL is in
   `app/src/map.ts`.
-- Place search: Photon (komoot.io), biased to the Ann Arbor area. Sign
-  addresses are searched locally and work offline.
+- Place search: Photon (komoot.io), biased to the Ann Arbor area. Published
+  location addresses are searched locally and work offline.
 - Seen progress lives only in the browser's localStorage. iOS Safari can evict
   it after ~7 days of not visiting; the progress panel has copy/paste backup
   buttons for that reason.
