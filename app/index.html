@@ -51,6 +51,13 @@
     <div class="route-basemap absolute inset-0" id="routeBasemap" aria-hidden="true"></div>
     <canvas class="absolute inset-0 h-full w-full cursor-grab touch-none" id="routeCanvas"></canvas>
     <div class="pointer-events-none absolute top-[calc(122px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a route stop to start</div>
+    <div class="map-add-prompt" id="mapAddPrompt" hidden role="dialog" aria-label="Add stop to route">
+      <p class="map-add-prompt-label" id="mapAddPromptLabel"></p>
+      <div class="map-add-prompt-actions">
+        <button type="button" class="map-add-prompt-cancel" id="mapAddPromptCancel">Cancel</button>
+        <button type="button" class="map-add-prompt-confirm" id="mapAddPromptConfirm">Add stop</button>
+      </div>
+    </div>
     <div class="route-drawer" id="routeDrawer">
       <div class="drawer-bar" id="drawerBar" role="button" tabindex="0" aria-expanded="true" aria-controls="drawerBody">
         <div class="sheet-handle" aria-hidden="true"></div>
@@ -82,27 +89,7 @@
       </div>
 
       <div class="flex min-h-0 flex-col gap-5 max-wide:mb-2.5" id="stepPlan" hidden>
-        <div class="flex flex-col gap-2.5">
-          <div class="flex items-baseline justify-between gap-2.5">
-            <span class="min-w-0 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy"><span class="text-[10.5px] tracking-[0.6px] text-[#8c88a0] uppercase">Start</span><span class="ml-2" id="seedLabel"></span></span>
-            <button class="flex-none cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] leading-[1.2] font-bold text-peri" id="changeStart">change</button>
-          </div>
-          <div class="rounded-xl border border-[#e3e4ee] bg-[#fafaff] p-2.5">
-            <div class="mb-1.5 flex items-center justify-between">
-              <span class="font-display text-[12px] font-extrabold tracking-[0.5px] text-navy uppercase">Necessary stops</span>
-              <button class="cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] font-bold text-peri" id="addNecessary">+ add</button>
-            </div>
-            <ol class="m-0 flex list-none flex-col gap-1 p-0" id="necessaryStops"></ol>
-            <p class="m-0 text-[12px] text-[#8c88a0]" id="noNecessary">None — optional code stops only</p>
-          </div>
-          <div class="flex items-baseline justify-between gap-2.5">
-            <span class="min-w-0 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy"><span class="text-[10.5px] tracking-[0.6px] text-[#8c88a0] uppercase">Finish</span><span class="ml-2" id="finishLabel"></span></span>
-            <div class="flex flex-none gap-2">
-              <button class="cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] leading-[1.2] font-bold text-peri" id="finishAtStart" hidden>return to start</button>
-              <button class="cursor-pointer border-0 bg-transparent p-0 font-body text-[13px] leading-[1.2] font-bold text-peri" id="changeFinish">change</button>
-            </div>
-          </div>
-        </div>
+        <ol class="itinerary-list" id="itineraryList" aria-label="Route itinerary"></ol>
         <div class="flex flex-col gap-1.5">
           <div class="flex items-center justify-between gap-2.5">
             <input class="flex-1 accent-coral" type="range" id="budgetSlider" min="0.5" max="10" step="0.5" value="2" aria-label="Route budget" />
@@ -110,15 +97,24 @@
           </div>
           <div class="flex flex-wrap items-center justify-between gap-x-2.5 gap-y-1.5">
             <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold"><input class="accent-green" type="checkbox" id="skipSeen" checked /><span>Skip seen</span></label>
-            <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold" title="Skip the slowed-down build animation"><input class="accent-green" type="checkbox" id="fullSpeed" /><span>Full speed</span></label>
+            <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+              <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold" title="Rebuild the route whenever you add, move, or remove stops"><input class="accent-green" type="checkbox" id="liveUpdate" /><span>Live update</span></label>
+              <label class="flex cursor-pointer items-center gap-1.5 text-[13px] leading-[1.2] font-bold" title="Skip the slowed-down build animation"><input class="accent-green" type="checkbox" id="fullSpeed" /><span>Full speed</span></label>
+            </div>
           </div>
         </div>
-        <button class="inline-flex w-full cursor-pointer appearance-none items-center justify-center gap-2 rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60" id="createRoute">
-          <svg class="size-[18px] flex-none" id="createRouteIcon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden>
-            <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
-          </svg>
-          <span id="createRouteLabel">Create route</span>
-        </button>
+        <div class="flex items-stretch gap-2.5">
+          <button class="inline-flex min-w-0 flex-1 cursor-pointer appearance-none items-center justify-center gap-2 rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60" id="createRoute">
+            <svg class="size-[18px] flex-none" id="createRouteIcon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" hidden>
+              <path fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5" />
+            </svg>
+            <span id="createRouteLabel">Create route</span>
+          </button>
+          <button type="button" class="inline-flex min-w-0 flex-1 cursor-pointer appearance-none items-center justify-center gap-2 rounded-full border-[2.5px] border-navy bg-white px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white" id="clearRoute" title="Clear the itinerary and start over">
+            <span class="size-[18px] flex-none" id="clearRouteSpacer" aria-hidden="true" hidden></span>
+            <span>Clear route</span>
+          </button>
+        </div>
         <p class="m-0 font-display text-[15px] leading-[1.3] font-extrabold text-navy max-wide:hidden" id="routeSummary" hidden></p>
         <button class="cursor-pointer appearance-none rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white" id="walkStart" hidden>Walk with me</button>
         <div class="flex items-center justify-between gap-2" id="routeActions" hidden>

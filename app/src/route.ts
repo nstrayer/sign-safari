@@ -88,18 +88,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   const els = {
     view: el("routeView"), basemap: el("routeBasemap"), canvas: el<HTMLCanvasElement>("routeCanvas"),
     hint: el("routeHint"), drawer: el("routeDrawer"), drawerBar: el("drawerBar"), drawerTitle: el("drawerTitle"),
+    mapAddPrompt: el("mapAddPrompt"), mapAddPromptLabel: el("mapAddPromptLabel"),
+    mapAddPromptCancel: el("mapAddPromptCancel"), mapAddPromptConfirm: el("mapAddPromptConfirm"),
     loading: el("routeLoading"), stepIntro: el("stepIntro"), stepStart: el("stepStart"), stepPlan: el("stepPlan"),
     stepWalk: el("stepWalk"), introGo: el("introGo"), useLocation: el<HTMLButtonElement>("useLocation"),
-    seedLabel: el("seedLabel"),
-    changeStart: el("changeStart"), necessaryStops: el("necessaryStops"), noNecessary: el("noNecessary"),
-    addNecessary: el("addNecessary"), finishLabel: el("finishLabel"), changeFinish: el("changeFinish"),
-    finishAtStart: el("finishAtStart"), itinerarySearch: el("itinerarySearch"),
+    itineraryList: el("itineraryList"), itinerarySearch: el("itinerarySearch"),
     itinerarySearchTitle: el("itinerarySearchTitle"), itinerarySearchCancel: el("itinerarySearchCancel"),
     itineraryInput: el<HTMLInputElement>("itineraryInput"), itineraryResults: el("itineraryResults"),
     slider: el<HTMLInputElement>("budgetSlider"), budgetLabel: el<HTMLButtonElement>("budgetLabel"),
-    skipSeen: el<HTMLInputElement>("skipSeen"), fullSpeed: el<HTMLInputElement>("fullSpeed"),
+    skipSeen: el<HTMLInputElement>("skipSeen"), liveUpdate: el<HTMLInputElement>("liveUpdate"),
+    fullSpeed: el<HTMLInputElement>("fullSpeed"),
     createRoute: el<HTMLButtonElement>("createRoute"), createRouteIcon: svgEl("createRouteIcon"),
-    createRouteLabel: el("createRouteLabel"), summary: el("routeSummary"), actions: el("routeActions"),
+    createRouteLabel: el("createRouteLabel"), clearRoute: el<HTMLButtonElement>("clearRoute"),
+    clearRouteSpacer: el("clearRouteSpacer"),
+    summary: el("routeSummary"), actions: el("routeActions"),
     exportGpx: el("exportGpx"), shareRoute: el<HTMLButtonElement>("shareRoute"),
     stopsToggle: el<HTMLButtonElement>("stopsToggle"), stops: el("routeStops"),
     walkStart: el<HTMLButtonElement>("walkStart"), walkProgress: el("walkProgress"), walkAddr: el("walkAddr"),
@@ -124,11 +126,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   let finish: RouteAnchor | null = null;
   let finishFollowsStart = true;
   let editTarget: EditTarget | null = null;
+  /** Map-tap candidate waiting for Add / Cancel in the itinerary list. */
+  let pendingMapAdd: RouteAnchor | null = null;
   let route: ActiveRoute | null = null;
   let routePath: Path2D | null = null;
   let distanceUnit: DistanceUnit = store.settings().distanceUnit;
   let needsDraw = false;
   let buildGen = 0;
+  let liveRebuildTimer: number | null = null;
+  /** Cancels an in-flight camera ease when bumped. */
+  let viewAnimGen = 0;
+  /** Previous route outline fading out during a live path swap. */
+  let fadingRoutePath: Path2D | null = null;
+  let routePathFade = 1;
+  let routeFadeGen = 0;
 
   let walk: { at: number } | null = null;
   let enteringCode = false;
@@ -170,8 +181,16 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       els.hint.textContent = "You can also tap a routeable code location";
       if (!start) openItinerarySearch({ kind: "start" });
     }
-    if (step === "plan" && start) els.hint.textContent = `Starting at ${start.label}`;
+    if (step === "plan" && start) {
+      els.hint.textContent = pendingMapAdd
+        ? `Add ${pendingMapAdd.label}?`
+        : "Tap a code location to add it, or search below";
+    }
     if (step === "intro" || step === "walk") closeItinerarySearch();
+    if (step !== "plan") {
+      pendingMapAdd = null;
+      hideMapAddPrompt();
+    }
     if (step !== "plan" || !route) setDrawer(true);
   }
 
@@ -184,8 +203,17 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function invalidateRoute(): void {
     buildGen++;
+    // Live mode: keep the current path on screen until the replacement is ready.
+    if (els.liveUpdate.checked && !walk && start && finish && currentStep() === "plan") {
+      if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+      scheduleLiveRebuild();
+      return;
+    }
     route = null;
     routePath = null;
+    fadingRoutePath = null;
+    routePathFade = 1;
+    routeFadeGen++;
     els.summary.hidden = true;
     els.actions.hidden = true;
     els.walkStart.hidden = true;
@@ -193,6 +221,20 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setBuilding(false);
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);
     scheduleDraw();
+  }
+
+  /**
+   * When Live update is on, debounce a silent rebuild after itinerary edits.
+   * No-ops while walking, before start/finish exist, or outside the plan step.
+   */
+  function scheduleLiveRebuild(): void {
+    if (!els.liveUpdate.checked || walk || !start || !finish || currentStep() !== "plan") return;
+    if (liveRebuildTimer !== null) window.clearTimeout(liveRebuildTimer);
+    liveRebuildTimer = window.setTimeout(() => {
+      liveRebuildTimer = null;
+      if (!els.liveUpdate.checked || walk || !start || !finish || currentStep() !== "plan") return;
+      rebuild({ instant: true });
+    }, 140);
   }
 
   function setStart(anchor: RouteAnchor): void {
@@ -210,7 +252,6 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     store.setRouteIntroSeen();
     setStep("start");
   });
-  els.changeStart.addEventListener("click", () => openItinerarySearch({ kind: "start" }));
 
   function load(): Promise<void> {
     if (!loadPromise) {
@@ -256,8 +297,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     syncBasemap();
   }
 
-  function fitToCoordinates(coordinates: LonLat[], maxZoom = 200): void {
-    if (!graph || !coordinates.length) return;
+  /** Target camera for fitting a set of lon/lat coordinates into the usable map area. */
+  function computeFitView(coordinates: LonLat[], maxZoom = 200): { cx: number; cy: number; scale: number } | null {
+    if (!graph || !coordinates.length) return null;
     let xMin = Infinity, xMax = -Infinity, yMin = Infinity, yMax = -Infinity;
     for (const [lon, lat] of coordinates) {
       const x = lon * graph.kx - graph.x0, y = lat - graph.y0;
@@ -269,10 +311,95 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const header = 136, availableWidth = wide ? width - 420 : width;
     const availableHeight = wide ? height - header - 24 : Math.max(height - header - els.drawer.offsetHeight - 16, 120);
     const spanX = Math.max(xMax - xMin, 1e-5), spanY = Math.max(yMax - yMin, 1e-5);
-    view.scale = Math.min(0.85 * Math.min(availableWidth / spanX, availableHeight / spanY), view.fitScale * maxZoom);
-    view.cx = (xMin + xMax) / 2 + (width / 2 - availableWidth / 2) / view.scale;
-    view.cy = (yMin + yMax) / 2 + (header + availableHeight / 2 - height / 2) / view.scale;
+    const scale = Math.min(0.85 * Math.min(availableWidth / spanX, availableHeight / spanY), view.fitScale * maxZoom);
+    return {
+      cx: (xMin + xMax) / 2 + (width / 2 - availableWidth / 2) / scale,
+      cy: (yMin + yMax) / 2 + (header + availableHeight / 2 - height / 2) / scale,
+      scale,
+    };
+  }
+
+  function fitToCoordinates(coordinates: LonLat[], maxZoom = 200): void {
+    const target = computeFitView(coordinates, maxZoom);
+    if (!target) return;
+    viewAnimGen++;
+    view.cx = target.cx; view.cy = target.cy; view.scale = target.scale;
     syncBasemap();
+  }
+
+  function easeOutCubic(t: number): number {
+    return 1 - (1 - t) ** 3;
+  }
+
+  /** True when any coordinate sits outside the padded visible map (so a refit is worth it). */
+  function coordinatesEscapeView(coordinates: LonLat[], pad = 36): boolean {
+    const width = els.canvas.clientWidth, height = els.canvas.clientHeight;
+    const wide = matchMedia("(min-width: 720px)").matches;
+    const rightInset = wide ? 400 : 0;
+    const bottomInset = wide ? 24 : els.drawer.offsetHeight;
+    for (const coords of coordinates) {
+      const [x, y] = coordsToScreen(coords);
+      if (x < pad || y < pad + 100 || x > width - rightInset - pad || y > height - bottomInset - pad) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Ease the camera to a fit of the given coordinates.
+   * @param duration - Animation length in ms
+   */
+  function animateToCoordinates(coordinates: LonLat[], duration = 420): void {
+    const target = computeFitView(coordinates);
+    if (!target) return;
+    const scaleDelta = Math.abs(Math.log(target.scale / Math.max(view.scale, 1e-9)));
+    const panPx = Math.hypot(target.cx - view.cx, target.cy - view.cy) * view.scale;
+    if (scaleDelta < 0.03 && panPx < 10) {
+      view.cx = target.cx; view.cy = target.cy; view.scale = target.scale;
+      syncBasemap(); scheduleDraw();
+      return;
+    }
+    const gen = ++viewAnimGen;
+    const from = { cx: view.cx, cy: view.cy, scale: view.scale };
+    const started = performance.now();
+    const tick = (now: number): void => {
+      if (gen !== viewAnimGen) return;
+      const t = Math.min(1, (now - started) / duration);
+      const e = easeOutCubic(t);
+      view.cx = from.cx + (target.cx - from.cx) * e;
+      view.cy = from.cy + (target.cy - from.cy) * e;
+      view.scale = Math.exp(Math.log(from.scale) + (Math.log(target.scale) - Math.log(from.scale)) * e);
+      syncBasemap();
+      scheduleDraw();
+      if (t < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+
+  /** Crossfade from the previous route outline into the new one. */
+  function crossfadeRoutePath(next: Path2D, duration = 320): void {
+    fadingRoutePath = routePath;
+    routePath = next;
+    if (!fadingRoutePath) {
+      routePathFade = 1;
+      return;
+    }
+    const gen = ++routeFadeGen;
+    routePathFade = 0;
+    const started = performance.now();
+    const tick = (now: number): void => {
+      if (gen !== routeFadeGen) return;
+      routePathFade = Math.min(1, (now - started) / duration);
+      scheduleDraw();
+      if (routePathFade < 1) requestAnimationFrame(tick);
+      else fadingRoutePath = null;
+    };
+    requestAnimationFrame(tick);
+  }
+
+  /** For live updates: keep the camera still when possible, otherwise ease to a new fit. */
+  function settleCameraForRouteUpdate(coordinates: LonLat[]): void {
+    if (!coordinates.length) return;
+    if (coordinatesEscapeView(coordinates)) animateToCoordinates(coordinates, 450);
   }
 
   function ensureBasemap(): void {
@@ -314,7 +441,11 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   function scheduleDraw(): void {
     if (needsDraw) return;
     needsDraw = true;
-    requestAnimationFrame(() => { needsDraw = false; draw(); });
+    requestAnimationFrame(() => {
+      needsDraw = false;
+      draw();
+      positionMapAddPrompt();
+    });
   }
   function drawBadge(x: number, y: number, text: string, fill: string, textFill: string, radius = 10, ring?: string): void {
     ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
@@ -333,9 +464,17 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
       ctx.setLineDash([3 / view.scale, 3 / view.scale]); ctx.stroke(connectorsPath); ctx.setLineDash([]);
     }
     ctx.lineWidth = 1.1 / view.scale; ctx.strokeStyle = COLORS.street; ctx.stroke(streetsPath);
+    if (fadingRoutePath && routePathFade < 1) {
+      ctx.lineWidth = 4 / view.scale; ctx.lineJoin = "round"; ctx.lineCap = "round";
+      ctx.strokeStyle = COLORS.route;
+      ctx.globalAlpha = (1 - routePathFade) * 0.5;
+      ctx.stroke(fadingRoutePath);
+      ctx.globalAlpha = 1;
+    }
     if (routePath) {
       ctx.lineWidth = 4 / view.scale; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.strokeStyle = walk ? COLORS.unseen : COLORS.route;
-      if (walk) ctx.globalAlpha = 0.38; ctx.stroke(routePath); ctx.globalAlpha = 1;
+      const pathAlpha = walk ? 0.38 : fadingRoutePath ? routePathFade : 1;
+      ctx.globalAlpha = pathAlpha; ctx.stroke(routePath); ctx.globalAlpha = 1;
       if (walk && walkLegPath) { ctx.lineWidth = 5 / view.scale; ctx.strokeStyle = COLORS.unseen; ctx.stroke(walkLegPath); }
     }
     ctx.restore();
@@ -365,6 +504,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     } else if (start) {
       const [x, y] = coordsToScreen(start.coords); drawBadge(x, y, "S", COLORS.seed, COLORS.route);
     }
+    if (pendingMapAdd) {
+      const [x, y] = coordsToScreen(pendingMapAdd.coords);
+      drawBadge(x, y, "+", COLORS.necessary, "#fff", 12, COLORS.seed);
+    }
     if (walk && herePos) {
       const [x, y] = toScreen(herePos.x, herePos.y);
       ctx.beginPath(); ctx.arc(x, y, 15, 0, Math.PI * 2); ctx.fillStyle = "rgba(91,194,240,0.25)"; ctx.fill();
@@ -375,6 +518,7 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   const pointers = new Map<number, { x: number; y: number }>();
   let moved = false;
   function zoomAt(x: number, y: number, factor: number): void {
+    viewAnimGen++;
     const next = Math.min(view.fitScale * 200, Math.max(view.fitScale * 0.7, view.scale * factor));
     factor = next / view.scale;
     view.cx += (x - els.canvas.clientWidth / 2) * (1 - 1 / factor) / view.scale;
@@ -388,7 +532,10 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const pointer = pointers.get(event.pointerId); if (!pointer) return;
     const dx = event.clientX - pointer.x, dy = event.clientY - pointer.y;
     if (Math.abs(dx) + Math.abs(dy) > 3) moved = true;
-    if (pointers.size === 1) { view.cx -= dx / view.scale; view.cy += dy / view.scale; syncBasemap(); scheduleDraw(); }
+    if (pointers.size === 1) {
+      viewAnimGen++;
+      view.cx -= dx / view.scale; view.cy += dy / view.scale; syncBasemap(); scheduleDraw();
+    }
     else if (pointers.size === 2) {
       const [a, b] = [...pointers.values()], before = Math.hypot(a.x - b.x, a.y - b.y);
       pointer.x = event.clientX; pointer.y = event.clientY;
@@ -442,11 +589,22 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
 
   function applyEditedAnchor(anchor: RouteAnchor): void {
     if (!editTarget) { setStart(anchor); return; }
-    if (editTarget.kind === "start") setStart(anchor);
-    else if (editTarget.kind === "finish") { finish = anchor; finishFollowsStart = false; invalidateRoute(); renderItineraryEditor(); }
-    else if (editTarget.kind === "add") { necessary.push(anchor); invalidateRoute(); renderItineraryEditor(); }
-    else { necessary[editTarget.index] = anchor; invalidateRoute(); renderItineraryEditor(); }
+    if (editTarget.kind === "start") {
+      setStart(anchor);
+      return;
+    }
+    if (editTarget.kind === "finish") {
+      finish = anchor;
+      finishFollowsStart = false;
+    } else if (editTarget.kind === "add") {
+      necessary.push(anchor);
+    } else {
+      necessary[editTarget.index] = anchor;
+    }
+    invalidateRoute();
     closeItinerarySearch();
+    renderItineraryEditor();
+    if (start) els.hint.textContent = "Tap a code location to add it, or search below";
   }
 
   function tap(x: number, y: number): void {
@@ -459,9 +617,108 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }
     if (best < 0) return;
     const anchor = anchorForStop(best);
-    if (currentStep() === "start" && !start) setStart(anchor);
-    else if (editTarget) applyEditedAnchor(anchor);
+    if (currentStep() === "start" && !start) {
+      setStart(anchor);
+      return;
+    }
+    // Explicit edit (change start/finish, or add-via-search) applies immediately.
+    if (editTarget) {
+      applyEditedAnchor(anchor);
+      return;
+    }
+    // Plan mode: offer to add the tapped stop without requiring the Add row first.
+    if (currentStep() === "plan" && start) offerMapAdd(anchor);
   }
+
+  /** True when this place is already a necessary stop (same code location or node). */
+  function isAlreadyNecessary(anchor: RouteAnchor): boolean {
+    return necessary.some((existing) => {
+      if (anchor.codeStopIndex !== undefined && existing.codeStopIndex === anchor.codeStopIndex) return true;
+      return existing.node === anchor.node;
+    });
+  }
+
+  /** Show a map-anchored confirm for a tapped stop, or toast if it is already on the route. */
+  function offerMapAdd(anchor: RouteAnchor): void {
+    if (isAlreadyNecessary(anchor)) {
+      showToast("That stop is already on your route.");
+      return;
+    }
+    pendingMapAdd = anchor;
+    showMapAddPrompt();
+    els.hint.hidden = false;
+    els.hint.textContent = `Add ${anchor.label}?`;
+  }
+
+  /** Position and reveal the floating confirm next to the pending stop. */
+  function showMapAddPrompt(): void {
+    if (!pendingMapAdd) {
+      els.mapAddPrompt.hidden = true;
+      return;
+    }
+    els.mapAddPromptLabel.textContent = pendingMapAdd.label;
+    els.mapAddPrompt.hidden = false;
+    positionMapAddPrompt();
+  }
+
+  /** Anchor the confirm card near the stop, clamped inside the visible map area. */
+  function positionMapAddPrompt(): void {
+    if (!pendingMapAdd || els.mapAddPrompt.hidden) return;
+    const [sx, sy] = coordsToScreen(pendingMapAdd.coords);
+    const viewW = els.view.clientWidth;
+    const viewH = els.view.clientHeight;
+    const wide = matchMedia("(min-width: 720px)").matches;
+    const pad = 10;
+    const promptW = els.mapAddPrompt.offsetWidth || 220;
+    const promptH = els.mapAddPrompt.offsetHeight || 88;
+    // Keep clear of the bottom drawer on narrow screens and the docked card on wide.
+    const bottomSafe = wide ? pad : Math.max(pad, els.drawer.offsetHeight + 12);
+    const rightSafe = wide ? 400 : pad;
+
+    // Prefer above the stop; flip below if there is not enough room.
+    let left = sx - promptW / 2;
+    let top = sy - promptH - 18;
+    const placeBelow = top < pad + 100;
+    if (placeBelow) top = sy + 18;
+
+    left = Math.max(pad, Math.min(left, viewW - rightSafe - promptW));
+    top = Math.max(pad + 100, Math.min(top, viewH - bottomSafe - promptH));
+
+    els.mapAddPrompt.style.left = `${left}px`;
+    els.mapAddPrompt.style.top = `${top}px`;
+    els.mapAddPrompt.style.setProperty("--caret-left", `${Math.max(16, Math.min(sx - left, promptW - 16))}px`);
+    els.mapAddPrompt.classList.toggle("map-add-prompt-below", placeBelow);
+  }
+
+  function hideMapAddPrompt(): void {
+    els.mapAddPrompt.hidden = true;
+  }
+
+  function confirmPendingMapAdd(): void {
+    if (!pendingMapAdd) return;
+    necessary.push(pendingMapAdd);
+    pendingMapAdd = null;
+    hideMapAddPrompt();
+    invalidateRoute();
+    closeItinerarySearch();
+    renderItineraryEditor();
+    els.hint.textContent = "Tap another code location to keep adding";
+  }
+
+  function cancelPendingMapAdd(): void {
+    pendingMapAdd = null;
+    hideMapAddPrompt();
+    if (start) els.hint.textContent = "Tap a code location to add it, or search below";
+  }
+
+  els.mapAddPromptConfirm.addEventListener("click", (event) => {
+    event.stopPropagation();
+    confirmPendingMapAdd();
+  });
+  els.mapAddPromptCancel.addEventListener("click", (event) => {
+    event.stopPropagation();
+    cancelPendingMapAdd();
+  });
 
   function localAddrMatches(query: string): AddrItem[] {
     if (!graph) return [];
@@ -512,45 +769,293 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     }, () => { done(); showToast("Couldn't get your location — try the address box."); }, { enableHighAccuracy: true, timeout: 10000 });
   });
 
+  /** Home slot for the shared search panel when it is not embedded in the add card. */
+  const itinerarySearchHome = {
+    parent: els.itinerarySearch.parentElement,
+    next: els.itinerarySearch.nextSibling,
+  };
+
+  /** Move the search panel back above the plan step so list re-renders cannot destroy it. */
+  function restoreItinerarySearchHome(): void {
+    const { parent, next } = itinerarySearchHome;
+    if (!parent || els.itinerarySearch.parentElement === parent) {
+      els.itinerarySearch.classList.remove("itinerary-search-embedded");
+      return;
+    }
+    parent.insertBefore(els.itinerarySearch, next);
+    els.itinerarySearch.classList.remove("itinerary-search-embedded");
+  }
+
   function openItinerarySearch(target: EditTarget): void {
     editTarget = target;
-    const title = target.kind === "start" ? start ? "Change Start" : "Choose Start" : target.kind === "finish" ? "Choose Finish" : target.kind === "add" ? "Add necessary stop" : "Change necessary stop";
+    pendingMapAdd = null;
+    hideMapAddPrompt();
+    const title = target.kind === "start"
+      ? start ? "Change Start" : "Choose Start"
+      : target.kind === "finish"
+        ? "Choose Finish"
+        : target.kind === "add"
+          ? "Add necessary stop"
+          : "Change necessary stop";
     els.itinerarySearchTitle.textContent = title;
     els.itinerarySearchCancel.hidden = target.kind === "start" && !start;
-    els.itinerarySearch.hidden = false; els.itineraryInput.value = ""; els.itineraryResults.hidden = true;
+    els.itineraryInput.value = "";
+    els.itineraryResults.hidden = true;
+
+    if (target.kind === "add") {
+      // Embed search inside the add card and point the map hint at tapping a stop.
+      renderItineraryEditor();
+      els.hint.hidden = false;
+      els.hint.textContent = "Tap a code location on the map to add it";
+    } else {
+      restoreItinerarySearchHome();
+      // Collapse an open add card if the user switched to editing start/finish/etc.
+      if (currentStep() === "plan" && start) {
+        renderItineraryEditor();
+        els.hint.textContent = "Tap a code location to add it, or search below";
+      }
+      els.itinerarySearch.hidden = false;
+      els.itinerarySearch.classList.remove("itinerary-search-embedded");
+    }
     els.itineraryInput.focus();
   }
+
   function closeItinerarySearch(): void {
-    editTarget = null; els.itinerarySearch.hidden = true; els.itinerarySearchCancel.hidden = false; els.itineraryInput.value = ""; els.itineraryResults.hidden = true;
+    editTarget = null;
+    restoreItinerarySearchHome();
+    els.itinerarySearch.hidden = true;
+    els.itinerarySearchCancel.hidden = false;
+    els.itineraryInput.value = "";
+    els.itineraryResults.hidden = true;
   }
-  els.itinerarySearchCancel.addEventListener("click", closeItinerarySearch);
-  els.addNecessary.addEventListener("click", () => openItinerarySearch({ kind: "add" }));
-  els.changeFinish.addEventListener("click", () => openItinerarySearch({ kind: "finish" }));
-  els.finishAtStart.addEventListener("click", () => {
-    if (!start) return; finish = { ...start }; finishFollowsStart = true; invalidateRoute(); renderItineraryEditor();
+
+  els.itinerarySearchCancel.addEventListener("click", () => {
+    const wasAdding = editTarget?.kind === "add";
+    closeItinerarySearch();
+    if (wasAdding && start) {
+      renderItineraryEditor();
+      els.hint.textContent = "Tap a code location to add it, or search below";
+    }
+  });
+
+  type ItineraryAction =
+    | "change-start"
+    | "add"
+    | "change-finish"
+    | "return-start"
+    | "edit-necessary"
+    | "move-up"
+    | "move-down"
+    | "remove";
+
+  /** Build a delegated action button for an itinerary row. */
+  function createItineraryAction(
+    action: ItineraryAction,
+    label: string,
+    options?: { index?: number; disabled?: boolean; title?: string },
+  ): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "itinerary-action";
+    button.dataset.action = action;
+    if (options?.index !== undefined) button.dataset.index = String(options.index);
+    if (options?.disabled) button.disabled = true;
+    if (options?.title) button.title = options.title;
+    button.textContent = label;
+    return button;
+  }
+
+  /** Shared start/finish row shell: badge, role caption, address, and actions. */
+  function createItineraryPoint(
+    badge: string,
+    badgeClass: string,
+    role: string,
+    label: string,
+    actions: HTMLButtonElement[],
+    pointClass: string,
+  ): HTMLLIElement {
+    const row = document.createElement("li");
+    row.className = `itinerary-point ${pointClass}`;
+
+    const badgeEl = document.createElement("span");
+    badgeEl.className = `itinerary-badge ${badgeClass}`;
+    badgeEl.textContent = badge;
+    badgeEl.setAttribute("aria-hidden", "true");
+
+    const body = document.createElement("div");
+    body.className = "itinerary-body";
+
+    const caption = document.createElement("span");
+    caption.className = "itinerary-role";
+    caption.textContent = role;
+
+    const address = document.createElement("span");
+    address.className = "itinerary-label";
+    address.textContent = label;
+
+    body.append(caption, address);
+
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "itinerary-actions";
+    actionsEl.append(...actions);
+
+    row.append(badgeEl, body, actionsEl);
+    return row;
+  }
+
+  els.itineraryList.addEventListener("click", (event) => {
+    const target = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+    if (!target || !els.itineraryList.contains(target)) return;
+
+    const action = target.dataset.action as ItineraryAction | undefined;
+    if (!action) return;
+
+    const index = target.dataset.index !== undefined ? Number(target.dataset.index) : Number.NaN;
+
+    switch (action) {
+      case "change-start":
+        openItinerarySearch({ kind: "start" });
+        break;
+      case "add":
+        openItinerarySearch({ kind: "add" });
+        break;
+      case "change-finish":
+        openItinerarySearch({ kind: "finish" });
+        break;
+      case "return-start":
+        if (!start) return;
+        finish = { ...start };
+        finishFollowsStart = true;
+        invalidateRoute();
+        renderItineraryEditor();
+        break;
+      case "edit-necessary":
+        if (!Number.isFinite(index)) return;
+        openItinerarySearch({ kind: "necessary", index });
+        break;
+      case "move-up":
+        if (!Number.isFinite(index) || index <= 0) return;
+        [necessary[index - 1], necessary[index]] = [necessary[index], necessary[index - 1]];
+        invalidateRoute();
+        renderItineraryEditor();
+        break;
+      case "move-down":
+        if (!Number.isFinite(index) || index >= necessary.length - 1) return;
+        [necessary[index], necessary[index + 1]] = [necessary[index + 1], necessary[index]];
+        invalidateRoute();
+        renderItineraryEditor();
+        break;
+      case "remove":
+        if (!Number.isFinite(index)) return;
+        necessary.splice(index, 1);
+        invalidateRoute();
+        renderItineraryEditor();
+        break;
+    }
   });
 
   function renderItineraryEditor(): void {
-    els.seedLabel.textContent = start?.label ?? "";
-    els.finishLabel.textContent = finishFollowsStart ? `Back to ${start?.label ?? "Start"}` : finish?.label ?? "";
-    els.finishAtStart.hidden = finishFollowsStart;
-    els.necessaryStops.innerHTML = "";
-    els.noNecessary.hidden = necessary.length > 0;
+    // Park the shared search panel before wiping the list so we do not destroy it.
+    restoreItinerarySearchHome();
+    els.itineraryList.innerHTML = "";
+    if (!start) return;
+
+    const adding = editTarget?.kind === "add";
+
+    els.itineraryList.appendChild(createItineraryPoint(
+      "S",
+      "itinerary-badge-start",
+      "Start",
+      start.label,
+      [createItineraryAction("change-start", "change")],
+      "itinerary-point-start",
+    ));
+
     necessary.forEach((anchor, index) => {
       const row = document.createElement("li");
-      row.className = "flex items-center gap-1.5 rounded-lg bg-white px-2 py-1.5 text-[13px] font-bold text-ink";
-      const label = document.createElement("button"); label.className = "min-w-0 flex-1 cursor-pointer truncate border-0 bg-transparent p-0 text-left"; label.textContent = `${index + 1}. ${anchor.label}`;
-      label.addEventListener("click", () => openItinerarySearch({ kind: "necessary", index }));
-      const up = document.createElement("button"), down = document.createElement("button"), remove = document.createElement("button");
-      for (const button of [up, down, remove]) button.className = "cursor-pointer border-0 bg-transparent px-1 py-0.5 font-bold text-peri disabled:cursor-default disabled:opacity-30";
-      up.textContent = "↑"; up.title = "Move up"; up.disabled = index === 0;
-      down.textContent = "↓"; down.title = "Move down"; down.disabled = index === necessary.length - 1;
-      remove.textContent = "×"; remove.title = "Remove";
-      up.addEventListener("click", () => { [necessary[index - 1], necessary[index]] = [necessary[index], necessary[index - 1]]; invalidateRoute(); renderItineraryEditor(); });
-      down.addEventListener("click", () => { [necessary[index], necessary[index + 1]] = [necessary[index + 1], necessary[index]]; invalidateRoute(); renderItineraryEditor(); });
-      remove.addEventListener("click", () => { necessary.splice(index, 1); invalidateRoute(); renderItineraryEditor(); });
-      row.append(label, up, down, remove); els.necessaryStops.appendChild(row);
+      row.className = "itinerary-point itinerary-point-stop";
+
+      const badge = document.createElement("span");
+      badge.className = "itinerary-badge itinerary-badge-stop";
+      badge.textContent = String(index + 1);
+      badge.setAttribute("aria-hidden", "true");
+
+      const body = document.createElement("div");
+      body.className = "itinerary-body";
+
+      const caption = document.createElement("span");
+      caption.className = "itinerary-role";
+      caption.textContent = "Necessary stop";
+
+      const address = createItineraryAction("edit-necessary", anchor.label, { index });
+      address.className = "itinerary-label itinerary-label-button";
+
+      body.append(caption, address);
+
+      const actions = document.createElement("div");
+      actions.className = "itinerary-actions";
+      actions.append(
+        createItineraryAction("move-up", "↑", { index, disabled: index === 0, title: "Move up" }),
+        createItineraryAction("move-down", "↓", { index, disabled: index === necessary.length - 1, title: "Move down" }),
+        createItineraryAction("remove", "×", { index, title: "Remove" }),
+      );
+
+      row.append(badge, body, actions);
+      els.itineraryList.appendChild(row);
     });
+
+    const addRow = document.createElement("li");
+    addRow.className = adding
+      ? "itinerary-point itinerary-add itinerary-add-active"
+      : "itinerary-point itinerary-add";
+
+    const addBadge = document.createElement("span");
+    addBadge.className = "itinerary-badge itinerary-badge-add";
+    addBadge.textContent = "+";
+    addBadge.setAttribute("aria-hidden", "true");
+
+    const addBody = document.createElement("div");
+    addBody.className = "itinerary-body";
+
+    if (adding) {
+      els.itinerarySearch.classList.add("itinerary-search-embedded");
+      els.itinerarySearch.hidden = false;
+      addBody.append(els.itinerarySearch);
+
+      const mapHint = document.createElement("p");
+      mapHint.className = "itinerary-add-hint";
+      mapHint.textContent = "or tap a code location on the map";
+      addBody.append(mapHint);
+    } else {
+      const addButton = document.createElement("span");
+      addButton.className = "itinerary-add-label";
+      addButton.textContent = "Search for a stop";
+
+      const addSub = document.createElement("span");
+      addSub.className = "itinerary-add-sub";
+      addSub.textContent = "Or tap code locations on the map";
+
+      addBody.append(addButton, addSub);
+      addRow.addEventListener("click", () => openItinerarySearch({ kind: "add" }));
+      addRow.style.cursor = "pointer";
+    }
+
+    addRow.append(addBadge, addBody);
+    els.itineraryList.appendChild(addRow);
+
+    const finishLabel = finishFollowsStart ? `Back to ${start.label}` : finish?.label ?? "";
+    const finishActions: HTMLButtonElement[] = [];
+    if (!finishFollowsStart) finishActions.push(createItineraryAction("return-start", "return"));
+    finishActions.push(createItineraryAction("change-finish", "change"));
+
+    els.itineraryList.appendChild(createItineraryPoint(
+      "F",
+      "itinerary-badge-finish",
+      "Finish",
+      finishLabel,
+      finishActions,
+      "itinerary-point-finish",
+    ));
   }
 
   function budgetMeters(): number { return +els.slider.value * (distanceUnit === "mi" ? M_PER_MI : 1000); }
@@ -574,6 +1079,9 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
   els.slider.addEventListener("input", () => { refreshBudgetLabel(); invalidateRoute(); });
   els.budgetLabel.addEventListener("click", toggleDistanceUnit);
   els.skipSeen.addEventListener("change", invalidateRoute);
+  els.liveUpdate.addEventListener("change", () => {
+    if (els.liveUpdate.checked) scheduleLiveRebuild();
+  });
   store.onSeenChange(() => {
     if (route && els.skipSeen.checked && !walk) invalidateRoute();
     else scheduleDraw();
@@ -600,11 +1108,17 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     const path = new Path2D(); if (graph) appendCoordinates(path, graph, expandedPathCoordinates(graph, nodes), true); return path;
   }
   function setStatus(text: string): void { els.summary.hidden = false; els.summary.textContent = text; els.drawerTitle.textContent = text; }
-  const CREATE_PRIMARY = "cursor-pointer appearance-none inline-flex w-full items-center justify-center gap-2 rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60";
-  const CREATE_SECONDARY = "cursor-pointer appearance-none inline-flex w-full items-center justify-center gap-2 rounded-full border-[2.5px] border-navy bg-white px-4 py-2.5 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white disabled:opacity-60";
+  const CREATE_PRIMARY = "inline-flex min-w-0 flex-1 cursor-pointer appearance-none items-center justify-center gap-2 rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60";
+  const ROUTE_OUTLINE_BTN = "inline-flex min-w-0 flex-1 cursor-pointer appearance-none items-center justify-center gap-2 rounded-full border-[2.5px] border-navy bg-white px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white disabled:opacity-60";
   function setCreateRouteUi(kind: "create" | "creating" | "recreate"): void {
-    const secondary = kind === "recreate"; els.createRoute.className = secondary ? CREATE_SECONDARY : CREATE_PRIMARY;
-    if (secondary) els.createRouteIcon.removeAttribute("hidden"); else els.createRouteIcon.setAttribute("hidden", "");
+    const secondary = kind === "recreate";
+    els.createRoute.className = secondary ? ROUTE_OUTLINE_BTN : CREATE_PRIMARY;
+    if (secondary) els.createRouteIcon.removeAttribute("hidden");
+    else els.createRouteIcon.setAttribute("hidden", "");
+    // Match Clear route chrome and keep labels aligned when the recreate icon is visible.
+    els.clearRoute.className = ROUTE_OUTLINE_BTN;
+    if (secondary) els.clearRouteSpacer.removeAttribute("hidden");
+    else els.clearRouteSpacer.setAttribute("hidden", "");
     els.createRouteLabel.textContent = kind === "creating" ? "Creating..." : secondary ? "Recreate route" : "Create route";
   }
   function setBuilding(on: boolean): void {
@@ -612,14 +1126,74 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
     setCreateRouteUi(on ? "creating" : route ? "recreate" : "create");
   }
 
-  els.createRoute.addEventListener("click", rebuild);
-  function rebuild(): void {
-    if (!start || !finish || !graph) return;
-    const generation = ++buildGen; setBuilding(true); setStatus("Checking the required itinerary...");
-    els.actions.hidden = true; els.walkStart.hidden = true; els.stops.hidden = true;
-    setTimeout(() => runBuild(generation), 30);
+  els.createRoute.addEventListener("click", () => rebuild());
+  els.clearRoute.addEventListener("click", clearRoutePlanner);
+
+  /**
+   * Wipe the itinerary and built route, then return to picking a start.
+   */
+  function clearRoutePlanner(): void {
+    if (liveRebuildTimer !== null) {
+      window.clearTimeout(liveRebuildTimer);
+      liveRebuildTimer = null;
+    }
+    if (walk) {
+      if (geoWatch !== null) { navigator.geolocation.clearWatch(geoWatch); geoWatch = null; }
+      wakeLock?.release().catch(() => {}); wakeLock = null;
+      walk = null; enteringCode = false;
+      els.walkCodeEntry.hidden = true; els.walkActions.hidden = false;
+      walkLegPath = null; herePos = null;
+    }
+    clearWalkSave();
+    pendingMapAdd = null;
+    hideMapAddPrompt();
+    closeItinerarySearch();
+    start = null;
+    necessary = [];
+    finish = null;
+    finishFollowsStart = true;
+    editTarget = null;
+    buildGen++;
+    route = null;
+    routePath = null;
+    fadingRoutePath = null;
+    routePathFade = 1;
+    routeFadeGen++;
+    viewAnimGen++;
+    els.summary.hidden = true;
+    els.actions.hidden = true;
+    els.walkStart.hidden = true;
+    els.stops.hidden = true;
+    els.stops.innerHTML = "";
+    setBuilding(false);
+    setCreateRouteUi("create");
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);
+    fitToStops();
+    setStep("start");
+    els.hint.textContent = "You can also tap a routeable code location";
+    scheduleDraw();
+    showToast("Route cleared — pick a new starting point.");
   }
-  async function runBuild(generation: number): Promise<void> {
+
+  /**
+   * Build (or rebuild) the optimized route for the current itinerary.
+   * @param options.instant - Skip the visit-by-visit reveal (used for live updates)
+   */
+  function rebuild(options?: { instant?: boolean }): void {
+    if (!start || !finish || !graph) return;
+    const instant = options?.instant === true;
+    const generation = ++buildGen;
+    if (!instant) {
+      setBuilding(true);
+      setStatus("Checking the required itinerary...");
+      els.actions.hidden = true; els.walkStart.hidden = true; els.stops.hidden = true;
+    } else {
+      setBuilding(true);
+      setStatus("Updating route...");
+    }
+    setTimeout(() => { void runBuild(generation, instant); }, instant ? 0 : 30);
+  }
+  async function runBuild(generation: number, instant = false): Promise<void> {
     if (generation !== buildGen || !start || !finish || !graph) return;
     const excluded = new Set<number>();
     if (els.skipSeen.checked) graph.stops.forEach((stop, index) => { if (store.isSeen(stop.id)) excluded.add(index); });
@@ -631,6 +1205,16 @@ export function createRoutePlanner({ store, showToast }: { store: Store; showToa
         ? `Required trip needs at least ${fmtRouteDistance(result.minimumMeters, distanceUnit)} — raise the maximum or change the itinerary.`
         : "Those required places are not connected by the mapped walking network.");
       scheduleDraw(); return;
+    }
+    if (instant) {
+      const coordinates = expandedPathCoordinates(graph, result.pathNodes);
+      route = { ...result };
+      crossfadeRoutePath(pathFromNodes(route.pathNodes));
+      settleCameraForRouteUpdate(coordinates);
+      setBuilding(false);
+      renderResult();
+      scheduleDraw();
+      return;
     }
     route = { ...result, shown: 1 }; routePath = pathFromNodes(route.pathNodes);
     setStatus(result.optionalByGap.flat().length ? "Adding code locations without moving your errands..." : "The required trip fits — no extra code detour fits.");
