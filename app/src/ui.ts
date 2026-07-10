@@ -99,9 +99,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     statPct: el("statPct"),
     seenList: el("seenList"),
     seenEmpty: el("seenEmpty"),
-    toggleHideSeen: el<HTMLInputElement>("toggleHideSeen"),
-    toggleBiz: el<HTMLInputElement>("toggleBiz"),
-    toggleBadges: el<HTMLInputElement>("toggleBadges"),
+    toggleHeatmap: el<HTMLInputElement>("toggleHeatmap"),
     exportBtn: el("exportBtn"),
     importBtn: el("importBtn"),
     aboutBtn: el("aboutBtn"),
@@ -333,13 +331,9 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
   // ---------- Toggles ----------
 
   const settings = store.settings();
-  els.toggleHideSeen.checked = settings.hideSeen;
-  els.toggleBiz.checked = settings.showBiz;
-  els.toggleBadges.checked = settings.showBadges;
+  els.toggleHeatmap.checked = settings.showHeatmap;
 
-  els.toggleHideSeen.addEventListener("change", () => store.setSetting("hideSeen", els.toggleHideSeen.checked));
-  els.toggleBiz.addEventListener("change", () => store.setSetting("showBiz", els.toggleBiz.checked));
-  els.toggleBadges.addEventListener("change", () => store.setSetting("showBadges", els.toggleBadges.checked));
+  els.toggleHeatmap.addEventListener("change", () => store.setSetting("showHeatmap", els.toggleHeatmap.checked));
 
   // ---------- Manual codes (signs missing from the data) ----------
 
@@ -448,7 +442,7 @@ export function createUi({ store, totalTrackable, signIndexById, onFlyTo, welcom
     setDataStamp(iso) {
       if (!iso) return;
       const d = new Date(iso);
-      const text = `Sign data as of ${d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}.`;
+      const text = `Location data as of ${d.toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })}.`;
       els.dataStamp.textContent = text;
       const welcomeStamp = document.getElementById("welcomeDataStamp");
       if (welcomeStamp) welcomeStamp.textContent = text;

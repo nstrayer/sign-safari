@@ -5,19 +5,19 @@
 //   nodes: [lon0, lat0, lon1, lat1, ...]
 //   edges: [a, b, meters, ...] as node indices
 //   edgeGeometryOffsets / edgeGeometryDeltas: optional compact road shapes
-//   signs: [{ id, addr, n }] where n indexes nodes
+//   stops: [{ id, addr, kind, n }] where n indexes nodes
 //
 // All routing runs client-side: Dijkstra over a CSR adjacency, a greedy
 // nearest-unvisited walk from the seed until the budget runs out, then
-// 2-opt to untangle the visiting order, a sweep that pulls in signs the
+// 2-opt to untangle the visiting order, a sweep that pulls in stops the
 // path already walks past, and a stretch pass that runs slightly over
-// budget when a short detour buys more signs.
+// budget when a short detour buys more stops.
 //
-// Signs are measured at their street snap node: a lawn sign is seen from
+// Stops are measured at their street snap node: a location is seen from
 // the road, so the access stub isn't real walking (unless it's long -
 // see STUB_FREE_M).
 
-import type { LonLat, NetworkData, NetworkSign } from "./types";
+import type { LonLat, NetworkData, NetworkStop } from "./types";
 
 export const MIN_PER_KM = 12; // casual walking pace
 // Access stubs at or under this read as "visible from the street" and cost
@@ -45,9 +45,9 @@ export interface Graph {
   /** Optional compact intermediate road geometry, parallel to `edges`. */
   edgeGeometryOffsets?: number[];
   edgeGeometryDeltas?: number[];
-  signs: NetworkSign[];
-  snap: Int32Array; // per sign: the street node its access stub hangs from
-  stubExtra: Float32Array; // per sign: round-trip stub charge, 0 when short
+  stops: NetworkStop[];
+  snap: Int32Array; // per stop: the street node its access stub hangs from
+  stubExtra: Float32Array; // per stop: round-trip stub charge, 0 when short
 }
 
 function edgePairKey(a: number, b: number): string {
@@ -118,20 +118,19 @@ export function buildGraph(raw: NetworkData): Graph {
   const edgeGeometryOffsets = geometryIsValid ? raw.edgeGeometryOffsets : undefined;
   const edgeGeometryDeltas = geometryIsValid ? raw.edgeGeometryDeltas : undefined;
 
-  // Each sign hangs off the road as a leaf via one access stub. Route math
-  // measures signs at the stub's street end (the snap node): you see a lawn
-  // sign from the street, so short stubs cost nothing. Long stubs keep a
-  // round-trip charge so far-off signs don't ride in for free.
-  const snap = new Int32Array(raw.signs.length);
-  const stubExtra = new Float32Array(raw.signs.length);
-  for (let j = 0; j < raw.signs.length; j++) {
-    const n = raw.signs[j].n;
+  // Each routeable location hangs off the road as a leaf via one access
+  // stub. Short stubs cost nothing; long stubs keep a round-trip charge so
+  // far-off locations don't ride in for free.
+  const snap = new Int32Array(raw.stops.length);
+  const stubExtra = new Float32Array(raw.stops.length);
+  for (let j = 0; j < raw.stops.length; j++) {
+    const n = raw.stops[j].n;
     if (off[n + 1] - off[n] === 1) {
       snap[j] = adj[off[n]];
       const stub = wt[off[n]];
       if (stub > STUB_FREE_M) stubExtra[j] = stub * 2;
     } else {
-      snap[j] = n; // not a simple leaf; measure at the sign itself
+      snap[j] = n; // not a simple leaf; measure at the location itself
     }
   }
 
@@ -139,7 +138,7 @@ export function buildGraph(raw: NetworkData): Graph {
     nodeCount, edgeCount, kx, x0, y0, xs, ys, off, adj, wt,
     nodes: raw.nodes, edges: raw.edges, edgeByPair,
     edgeGeometryOffsets, edgeGeometryDeltas,
-    signs: raw.signs, snap, stubExtra,
+    stops: raw.stops, snap, stubExtra,
   };
 }
 
@@ -305,8 +304,8 @@ export function makeDijkstraCache(graph: Graph, cap = 128): Shortest {
 
 // ---------- Routing ----------
 
-// The seed is any node on the network (a sign's node, or the node nearest a
-// geolocation/address). A sign sitting exactly at the seed is simply the
+// The seed is any node on the network (a stop's node, or the node nearest a
+// geolocation/address). A location sitting exactly at the seed is simply the
 // first greedy pick at 0 m. With `loop`, the route returns to the seed and
 // the budget covers the leg home.
 //
@@ -316,15 +315,15 @@ export function makeDijkstraCache(graph: Graph, cap = 128): Shortest {
 
 export type RowFor = (node: number) => Float32Array;
 
-// Per-build cache of "distance from node X to every sign's snap node" rows.
+// Per-build cache of "distance from node X to every stop's snap node" rows.
 // Pure road distance: any stub charge rides in graph.stubExtra instead.
 export function makeRows(graph: Graph, shortest: Shortest): RowFor {
   const rows = new Map<number, Float32Array>();
   return (node) => {
     if (!rows.has(node)) {
       const { dist } = shortest(node);
-      const row = new Float32Array(graph.signs.length);
-      for (let j = 0; j < graph.signs.length; j++) row[j] = dist[graph.snap[j]];
+      const row = new Float32Array(graph.stops.length);
+      for (let j = 0; j < graph.stops.length; j++) row[j] = dist[graph.snap[j]];
       rows.set(node, row);
     }
     return rows.get(node)!; // set just above when missing
@@ -339,23 +338,23 @@ export interface BuildOpts {
 }
 
 // Greedy: extend an existing stop order (possibly empty) by repeatedly
-// walking to the nearest sign that still fits the budget (including, for
+// walking to the nearest stop that still fits the budget (including, for
 // loops, the return leg home; the undirected graph makes the seed's own
-// row double as "distance home"). Mutates stopSigns; also used to refill
+// row double as "distance home"). Mutates stopIndices; also used to refill
 // budget freed up by 2-opt.
-export function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], spentMeters: number, { maxMeters, maxCount, excluded, loop }: BuildOpts): number {
-  const { signs, snap, stubExtra } = graph;
+export function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], spentMeters: number, { maxMeters, maxCount, excluded, loop }: BuildOpts): number {
+  const { stops, snap, stubExtra } = graph;
   const homeRow = rowFor(seedNode);
-  const used = new Set(stopSigns);
+  const used = new Set(stopIndices);
   const todo = new Set<number>();
-  for (let i = 0; i < signs.length; i++) {
+  for (let i = 0; i < stops.length; i++) {
     if (!excluded.has(i) && !used.has(i)) todo.add(i);
   }
 
   let total = spentMeters;
-  let cursor = stopSigns.length ? snap[stopSigns[stopSigns.length - 1]] : seedNode;
+  let cursor = stopIndices.length ? snap[stopIndices[stopIndices.length - 1]] : seedNode;
   let added = 0;
-  while (todo.size && stopSigns.length < maxCount) {
+  while (todo.size && stopIndices.length < maxCount) {
     const row = rowFor(cursor);
     let best = -1, bestD = Infinity;
     for (const c of todo) {
@@ -366,7 +365,7 @@ export function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, sto
       best = c;
     }
     if (best < 0 || !isFinite(bestD)) break;
-    stopSigns.push(best);
+    stopIndices.push(best);
     todo.delete(best);
     total += bestD;
     added++;
@@ -376,31 +375,31 @@ export function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, sto
 }
 
 // Path length of a stop order, with and without the loop leg home.
-export function routeTotals(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], loop: boolean): { pathMeters: number; totalMeters: number } {
+export function routeTotals(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], loop: boolean): { pathMeters: number; totalMeters: number } {
   const homeRow = rowFor(seedNode);
   let pathMeters = 0;
   let prevNode = seedNode;
-  for (const si of stopSigns) {
+  for (const si of stopIndices) {
     pathMeters += rowFor(prevNode)[si] + graph.stubExtra[si];
     prevNode = graph.snap[si];
   }
-  const home = loop && stopSigns.length ? homeRow[stopSigns[stopSigns.length - 1]] : 0;
+  const home = loop && stopIndices.length ? homeRow[stopIndices[stopIndices.length - 1]] : 0;
   return { pathMeters, totalMeters: pathMeters + home };
 }
 
 export interface Candidate {
-  stopSigns: number[];
+  stopIndices: number[];
   pathMeters: number;
   totalMeters: number;
 }
 
 // Multi-start: greedy is myopic about its opening move, so run it once for
-// each of the k nearest viable first signs and let the results race.
+// each of the k nearest viable first stops and let the results race.
 // Duplicates (openers that converge to the same route) are dropped.
 export function buildCandidates(graph: Graph, rowFor: RowFor, seedNode: number, opts: BuildOpts, k = 4): Candidate[] {
   const homeRow = rowFor(seedNode);
   const openers: [number, number][] = [];
-  for (let i = 0; i < graph.signs.length; i++) {
+  for (let i = 0; i < graph.stops.length; i++) {
     if (opts.excluded.has(i)) continue;
     const d = homeRow[i] + graph.stubExtra[i];
     if (!isFinite(d) || d + (opts.loop ? homeRow[i] : 0) > opts.maxMeters) continue;
@@ -411,36 +410,36 @@ export function buildCandidates(graph: Graph, rowFor: RowFor, seedNode: number, 
   const dedupe = new Set<string>();
   const candidates: Candidate[] = [];
   for (const [d, first] of openers.slice(0, k)) {
-    const stopSigns = [first];
-    greedyExtend(graph, rowFor, seedNode, stopSigns, d, opts);
-    const key = stopSigns.join(",");
+    const stopIndices = [first];
+    greedyExtend(graph, rowFor, seedNode, stopIndices, d, opts);
+    const key = stopIndices.join(",");
     if (dedupe.has(key)) continue;
     dedupe.add(key);
-    candidates.push({ stopSigns, ...routeTotals(graph, rowFor, seedNode, stopSigns, opts.loop) });
+    candidates.push({ stopIndices, ...routeTotals(graph, rowFor, seedNode, stopIndices, opts.loop) });
   }
   return candidates;
 }
 
 // 2-opt with the seed as a fixed anchor: reverse segments while the path
-// (plus the leg home, when looping) gets shorter. Mutates stopSigns and
+// (plus the leg home, when looping) gets shorter. Mutates stopIndices and
 // yields after each accepted reversal so the caller can animate it.
 // Stub charges don't move under reversal, so pure road rows suffice.
-export function* twoOptSteps(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], loop: boolean): Generator<{ pass: number; saved: number }> {
+export function* twoOptSteps(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], loop: boolean): Generator<{ pass: number; saved: number }> {
   const { snap } = graph;
   const homeRow = rowFor(seedNode);
-  const nodeOf = (p: number) => (p < 0 ? seedNode : snap[stopSigns[p]]);
-  const D = (p: number, signPos: number) => rowFor(nodeOf(p))[stopSigns[signPos]];
+  const nodeOf = (p: number) => (p < 0 ? seedNode : snap[stopIndices[p]]);
+  const D = (p: number, signPos: number) => rowFor(nodeOf(p))[stopIndices[signPos]];
   let saved = 0;
   for (let pass = 1; pass <= 10; pass++) {
     let improved = false;
-    for (let i = 0; i < stopSigns.length - 1; i++) {
-      for (let j = i + 1; j < stopSigns.length; j++) {
+    for (let i = 0; i < stopIndices.length - 1; i++) {
+      for (let j = i + 1; j < stopIndices.length; j++) {
         let delta = D(i - 1, j) - D(i - 1, i);
-        if (j + 1 < stopSigns.length) delta += D(i, j + 1) - D(j, j + 1);
-        else if (loop) delta += homeRow[stopSigns[i]] - homeRow[stopSigns[j]];
+        if (j + 1 < stopIndices.length) delta += D(i, j + 1) - D(j, j + 1);
+        else if (loop) delta += homeRow[stopIndices[i]] - homeRow[stopIndices[j]];
         if (delta < -0.01) {
           let lo = i, hi = j;
-          while (lo < hi) { const t = stopSigns[lo]; stopSigns[lo++] = stopSigns[hi]; stopSigns[hi--] = t; }
+          while (lo < hi) { const t = stopIndices[lo]; stopIndices[lo++] = stopIndices[hi]; stopIndices[hi--] = t; }
           saved -= delta;
           improved = true;
           yield { pass, saved };
@@ -453,9 +452,9 @@ export function* twoOptSteps(graph: Graph, rowFor: RowFor, seedNode: number, sto
 
 // Street-node path for the current stop order: one leg per stop, walking
 // prev[] back from each leg's end, plus the leg home when looping.
-export function legsForOrder(graph: Graph, shortest: Shortest, seedNode: number, stopSigns: number[], loop: boolean): number[][] {
-  const targets = stopSigns.map((si) => graph.snap[si]);
-  if (loop && stopSigns.length) targets.push(seedNode);
+export function legsForOrder(graph: Graph, shortest: Shortest, seedNode: number, stopIndices: number[], loop: boolean): number[][] {
+  const targets = stopIndices.map((si) => graph.snap[si]);
+  if (loop && stopIndices.length) targets.push(seedNode);
   const legs: number[][] = [];
   let from = seedNode;
   for (const to of targets) {
@@ -469,19 +468,19 @@ export function legsForOrder(graph: Graph, shortest: Shortest, seedNode: number,
   return legs;
 }
 
-// Signs whose snap node already lies on the walked path ride along free:
+// Stops whose snap node already lies on the walked path ride along free:
 // splice each into the stop order at the point the route passes it.
-// Mutates stopSigns; returns how many came aboard.
-export function sweepOnRoute(graph: Graph, shortest: Shortest, seedNode: number, stopSigns: number[], excluded: Set<number>, loop: boolean): number {
-  const legs = legsForOrder(graph, shortest, seedNode, stopSigns, loop);
+// Mutates stopIndices; returns how many came aboard.
+export function sweepOnRoute(graph: Graph, shortest: Shortest, seedNode: number, stopIndices: number[], excluded: Set<number>, loop: boolean): number {
+  const legs = legsForOrder(graph, shortest, seedNode, stopIndices, loop);
   // First place each path node appears, keyed as leg * 1e6 + position.
   const firstAt = new Map<number, number>();
   legs.forEach((leg, li) => leg.forEach((n, p) => {
     if (!firstAt.has(n)) firstAt.set(n, li * 1e6 + p);
   }));
-  const used = new Set(stopSigns);
-  const picks: [number, number][] = []; // [orderKey, sign]
-  for (let c = 0; c < graph.signs.length; c++) {
+  const used = new Set(stopIndices);
+  const picks: [number, number][] = []; // [orderKey, stop]
+  for (let c = 0; c < graph.stops.length; c++) {
     if (used.has(c) || excluded.has(c) || graph.stubExtra[c] > 0) continue;
     const key = firstAt.get(graph.snap[c]);
     if (key !== undefined) picks.push([key, c]);
@@ -489,41 +488,41 @@ export function sweepOnRoute(graph: Graph, shortest: Shortest, seedNode: number,
   if (!picks.length) return 0;
   picks.sort((a, b) => a[0] - b[0]);
   // Rebuild the order leg by leg; leg li ends at stop li, so its swept
-  // signs slot in just before it (home-leg signs land after the last stop).
+  // stops slot in just before it (home-leg stops land after the last stop).
   const out: number[] = [];
   let pi = 0;
   for (let li = 0; li < legs.length; li++) {
     while (pi < picks.length && Math.floor(picks[pi][0] / 1e6) === li) out.push(picks[pi++][1]);
-    if (li < stopSigns.length) out.push(stopSigns[li]);
+    if (li < stopIndices.length) out.push(stopIndices[li]);
   }
-  stopSigns.length = 0;
-  stopSigns.push(...out);
+  stopIndices.length = 0;
+  stopIndices.push(...out);
   return picks.length;
 }
 
 // Stretch pass: once the route has settled, keep inserting the leftover
-// sign with the cheapest best-position detour, letting the total run up to
+// stop with the cheapest best-position detour, letting the total run up to
 // slackMeters past the budget - a slightly longer walk that bags more
-// signs. Mutates stopSigns; returns how many were added.
-export function wiggleExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopSigns: number[], { maxMeters, maxCount, excluded, loop }: BuildOpts, slackMeters: number): number {
-  const { signs, snap, stubExtra } = graph;
+// stops. Mutates stopIndices; returns how many were added.
+export function wiggleExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], { maxMeters, maxCount, excluded, loop }: BuildOpts, slackMeters: number): number {
+  const { stops, snap, stubExtra } = graph;
   const cap = maxMeters + slackMeters;
-  let total = routeTotals(graph, rowFor, seedNode, stopSigns, loop).totalMeters;
-  const used = new Set(stopSigns);
+  let total = routeTotals(graph, rowFor, seedNode, stopIndices, loop).totalMeters;
+  const used = new Set(stopIndices);
   let added = 0;
-  while (stopSigns.length < maxCount) {
+  while (stopIndices.length < maxCount) {
     // Route anchors in walk order: seed, each stop's snap node, and the
     // seed again when looping. Gap g sits between anchors g and g+1;
     // dist(anchor, stop k) is just that anchor's row at k.
     const anchors = [seedNode];
-    for (const si of stopSigns) anchors.push(snap[si]);
+    for (const si of stopIndices) anchors.push(snap[si]);
     if (loop) anchors.push(seedNode);
     const rows = anchors.map((n) => rowFor(n));
     const gapLen = (g: number) =>
-      g < stopSigns.length ? rows[g][stopSigns[g]] : rows[g + 1][stopSigns[g - 1]];
+      g < stopIndices.length ? rows[g][stopIndices[g]] : rows[g + 1][stopIndices[g - 1]];
 
     let best = -1, bestGap = -1, bestDelta = Infinity;
-    for (let c = 0; c < signs.length; c++) {
+    for (let c = 0; c < stops.length; c++) {
       if (used.has(c) || excluded.has(c)) continue;
       for (let g = 0; g < anchors.length - 1; g++) {
         const delta = rows[g][c] + rows[g + 1][c] - gapLen(g) + stubExtra[c];
@@ -532,11 +531,11 @@ export function wiggleExtend(graph: Graph, rowFor: RowFor, seedNode: number, sto
       if (!loop) {
         // Open-ended route: tacking c onto the tail is also fair game.
         const delta = rows[rows.length - 1][c] + stubExtra[c];
-        if (delta < bestDelta) { bestDelta = delta; bestGap = stopSigns.length; best = c; }
+        if (delta < bestDelta) { bestDelta = delta; bestGap = stopIndices.length; best = c; }
       }
     }
     if (best < 0 || !isFinite(bestDelta) || total + bestDelta > cap) break;
-    stopSigns.splice(bestGap, 0, best);
+    stopIndices.splice(bestGap, 0, best);
     used.add(best);
     total += bestDelta;
     added++;

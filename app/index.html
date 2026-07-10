@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Sign Safari - AADL Summer Game 2026 Sign Map</title>
-  <meta name="description" content="Interactive heat map of Ann Arbor Summer Game 2026 lawn signs. Find signs near you and track the ones you've seen." />
+  <title>Sign Safari - Route and Explore Summer Game Codes</title>
+  <meta name="description" content="Plan routes and explore Ann Arbor Summer Game 2026 lawn signs and business code locations." />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
   <link rel="manifest" href="manifest.webmanifest" />
   <meta name="theme-color" content="#2F3061" />
@@ -17,7 +17,7 @@
        ordering and cache-busting via hashed asset names. -->
 </head>
 <body class="route-mode">
-  <div class="fixed inset-0 h-dvh bg-[#eef0f4]" id="map" aria-label="Map of Summer Game signs"></div>
+  <div class="fixed inset-0 h-dvh bg-[#eef0f4]" id="map" aria-label="Explore Summer Game code locations"></div>
 
   <header class="pointer-events-none fixed top-[calc(10px+env(safe-area-inset-top))] right-3 left-3 z-30 flex items-start justify-between gap-2.5">
     <div class="pointer-events-auto relative overflow-hidden rounded-card bg-navy bg-halftone pt-2.5 pr-[18px] pb-3 pl-4 shadow-card">
@@ -33,7 +33,7 @@
         <!-- .view-btn is a JS hook (main.ts); this one switch serves both views. -->
         <nav class="mt-2 flex w-fit rounded-full bg-white/12 p-[3px]" aria-label="View">
           <button class="view-btn is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3.5 py-1 font-display text-[12px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="route">Route</button>
-          <button class="view-btn cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3.5 py-1 font-display text-[12px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="map">Map</button>
+          <button class="view-btn cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3.5 py-1 font-display text-[12px] leading-[1.2] font-bold text-cream selected:bg-gold selected:text-navy" data-view="explore">Explore</button>
         </nav>
       </div>
     </div>
@@ -50,19 +50,19 @@
   <section class="fixed inset-0 z-20 h-dvh bg-cream" id="routeView" aria-label="Route planner">
     <div class="route-basemap absolute inset-0" id="routeBasemap" aria-hidden="true"></div>
     <canvas class="absolute inset-0 h-full w-full cursor-grab touch-none" id="routeCanvas"></canvas>
-    <div class="pointer-events-none absolute top-[calc(122px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a sign to start a route</div>
+    <div class="pointer-events-none absolute top-[calc(122px+env(safe-area-inset-top))] left-1/2 max-w-[min(86vw,420px)] -translate-x-1/2 overflow-hidden rounded-full bg-white px-3.5 py-2 text-center font-body text-[13px] leading-[1.3] font-bold text-ellipsis whitespace-nowrap text-ink shadow-card max-wide:hidden" id="routeHint">Tap a route stop to start</div>
     <div class="route-drawer" id="routeDrawer">
       <div class="drawer-bar" id="drawerBar" role="button" tabindex="0" aria-expanded="true" aria-controls="drawerBody">
         <div class="sheet-handle" aria-hidden="true"></div>
         <div class="mt-1 flex items-center gap-2.5">
-          <span class="min-w-0 flex-1 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy" id="drawerTitle">Plan a sign run</span>
+          <span class="min-w-0 flex-1 truncate font-display text-[15px] leading-[1.3] font-extrabold text-navy" id="drawerTitle">Plan a route</span>
           <svg class="drawer-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 14.5l6-6 6 6" /></svg>
         </div>
       </div>
       <div class="drawer-body" id="drawerBody">
       <div class="flex min-h-0 flex-col gap-2.5 max-wide:mb-2.5" id="stepIntro" hidden>
-        <h3 class="m-0 font-display text-[18px] leading-[1.2] font-extrabold text-navy max-wide:hidden">Plan a sign run</h3>
-        <p class="text-[13.5px] leading-[1.45]">Pick a starting point, set a budget - how far you feel like walking, or how many signs you're after - then create a route. It finds the shortest path through them along real streets. Seen signs are skipped so every stop is a new code word.</p>
+        <h3 class="m-0 font-display text-[18px] leading-[1.2] font-extrabold text-navy max-wide:hidden">Plan a route</h3>
+        <p class="text-[13.5px] leading-[1.45]">Pick a starting point, set a budget - how far you feel like walking, or how many code locations you're after - then create a route. It finds the shortest path through lawn signs and business codes along real streets. Seen stops are skipped so every stop is a new code word.</p>
         <button class="cursor-pointer appearance-none rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white disabled:opacity-60" id="introGo">Pick a starting point</button>
       </div>
 
@@ -73,7 +73,7 @@
           <input class="w-full rounded-xl border-2 border-[#e3e4ee] px-3 py-2.5 font-body text-[14px] leading-[1.2] font-normal text-ink outline-none focus:border-peri" id="addrInput" type="search" placeholder="...or type an address" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" aria-label="Search a starting address" />
           <ul class="mt-1 max-h-[180px] list-none overflow-y-auto rounded-xl border border-[#e3e4ee] bg-white p-1 shadow-card" id="addrResults" hidden></ul>
         </div>
-        <p class="text-[13.5px] leading-[1.45] text-[#6b6d8f]">...or tap any sign dot on the map above.</p>
+        <p class="text-[13.5px] leading-[1.45] text-[#6b6d8f]">...or tap any route stop on the map above.</p>
       </div>
 
       <div class="flex min-h-0 flex-col gap-2.5 max-wide:mb-2.5" id="stepPlan" hidden>
@@ -84,7 +84,7 @@
         <div class="flex items-center justify-between gap-2.5">
           <div class="flex rounded-full bg-[#eef0f4] p-[3px]" role="group" aria-label="Route budget type">
             <button class="is-active cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3 py-1.5 font-body text-[13px] leading-[1.2] font-bold text-ink selected:bg-navy selected:text-cream" id="modeDistance">Distance</button>
-            <button class="cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3 py-1.5 font-body text-[13px] leading-[1.2] font-bold text-ink selected:bg-navy selected:text-cream" id="modeCount">Sign count</button>
+            <button class="cursor-pointer appearance-none rounded-full border-0 bg-transparent px-3 py-1.5 font-body text-[13px] leading-[1.2] font-bold text-ink selected:bg-navy selected:text-cream" id="modeCount">Stop count</button>
           </div>
         </div>
         <div class="flex items-center justify-between gap-2.5">
@@ -121,9 +121,17 @@
         </div>
         <p class="m-0 font-display text-[20px] leading-[1.15] font-extrabold text-navy" id="walkAddr"></p>
         <p class="m-0 text-[13.5px] leading-[1.4] font-bold text-[#6b6d8f]" id="walkDist"></p>
-        <div class="mt-0.5 flex gap-2.5">
+        <div class="mt-0.5 flex gap-2.5" id="walkActions">
           <button class="flex-none cursor-pointer rounded-full border-[2.5px] border-navy bg-white px-4 py-2.5 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white" id="walkSkip">Skip</button>
           <button class="flex-1 cursor-pointer appearance-none rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white active:scale-[0.97]" id="walkDone">Found it!</button>
+        </div>
+        <div class="flex flex-col gap-2.5" id="walkCodeEntry" hidden>
+          <p class="m-0 text-[13.5px] leading-[1.4] font-bold text-[#6b6d8f]">Nice find! Add the code now, or skip it and keep walking.</p>
+          <input class="w-full rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="walkCodeInput" type="text" placeholder="Code word (optional)" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code word for this stop" />
+          <div class="flex gap-2.5">
+            <button class="flex-none cursor-pointer rounded-full border-[2.5px] border-navy bg-white px-4 py-2.5 font-display text-[15px] leading-[1.2] font-bold text-navy active:bg-navy active:text-white" id="walkCodeSkip">Skip code</button>
+            <button class="flex-1 cursor-pointer rounded-full border-0 bg-coral px-4 py-3 font-display text-[15px] leading-[1.2] font-bold text-white active:scale-[0.97]" id="walkCodeSave">Save &amp; next</button>
+          </div>
         </div>
       </div>
       </div>
@@ -153,7 +161,7 @@
       <p class="mt-2.5 mb-3.5 text-sm font-bold text-coral empty:hidden" id="detailStat"></p>
       <div class="mb-3 flex gap-2" id="codeRow">
         <!-- 16px input font prevents iOS zoom-on-focus -->
-        <input class="min-w-0 flex-1 rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="codeInput" type="text" placeholder="Code word from the sign" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code word from the sign" />
+        <input class="min-w-0 flex-1 rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="codeInput" type="text" placeholder="Code word from this location" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code word from this location" />
         <button class="flex-none cursor-pointer rounded-full border-none bg-navy px-5 font-display text-sm font-bold text-white active:scale-[0.96]" id="codeSave">Save</button>
       </div>
       <button class="w-full cursor-pointer rounded-full border-none bg-coral p-[15px] font-display text-[17px] font-bold text-white shadow-[0_4px_14px_rgba(232,112,74,0.45)] [transition:scale_0.12s_ease,background_0.2s_ease,box-shadow_0.2s_ease] active:scale-[0.97] seen:bg-green seen:shadow-[0_4px_14px_rgba(67,168,96,0.4)]" id="seenBtn">Mark as seen</button>
@@ -180,7 +188,7 @@
       <div class="grid grid-cols-3 gap-2.5">
         <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
           <span class="block font-display text-[26px] leading-none font-extrabold text-coral" id="statTotal">0</span>
-          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">signs seen</span>
+          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">code locations seen</span>
         </div>
         <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
           <span class="block font-display text-[26px] leading-none font-extrabold text-blue" id="statToday">0</span>
@@ -188,25 +196,23 @@
         </div>
         <div class="rounded-card bg-white px-2 py-3.5 text-center shadow-[0_3px_12px_rgba(38,40,72,0.08)]">
           <span class="block font-display text-[26px] leading-none font-extrabold text-green" id="statPct">0%</span>
-          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">of all signs</span>
+          <span class="mt-1 block text-[11px] font-bold tracking-[0.5px] uppercase text-[#8c88a0]">of all code locations</span>
         </div>
       </div>
 
       <div class="mt-[18px] mb-1">
-        <label class="toggle-row"><input type="checkbox" id="toggleHideSeen" /><span>Hide seen signs on the map</span></label>
-        <label class="toggle-row"><input type="checkbox" id="toggleBiz" /><span>Show business codes</span></label>
-        <label class="toggle-row"><input type="checkbox" id="toggleBadges" /><span>Show badge spots</span></label>
+        <label class="toggle-row"><input type="checkbox" id="toggleHeatmap" /><span>Show heatmap in Explore</span></label>
       </div>
 
       <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Recently spotted</h3>
       <ul id="seenList"></ul>
-      <p class="rounded-[14px] bg-white p-3.5 text-sm text-[#8c88a0]" id="seenEmpty">Nothing yet - tap a dot on the map and mark it seen! <span aria-hidden="true">&#9733;</span></p>
+      <p class="rounded-[14px] bg-white p-3.5 text-sm text-[#8c88a0]" id="seenEmpty">Nothing yet - tap a dot in Explore and mark it seen! <span aria-hidden="true">&#9733;</span></p>
 
       <h3 class="mt-[22px] mb-2 font-display text-[16px] font-bold text-navy">Your codes</h3>
-      <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Type each sign's code word into its card as you go, then copy the list here to redeem them at play.aadl.org or by text. Spotted a sign that isn't on the map? Add its code by hand below.</p>
+      <p class="mb-2.5 text-[13px] text-[#8c88a0]" id="codesNote">Save each location's code word as you go, then copy the list here to redeem them at play.aadl.org or by text. Spotted a code location that isn't on the map? Add its code by hand below.</p>
       <div class="mb-2.5 flex gap-2">
         <!-- 16px input font prevents iOS zoom-on-focus -->
-        <input class="min-w-0 flex-1 rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="extraCodeInput" type="text" placeholder="Code from a missing sign" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code from a sign not on the map" />
+        <input class="min-w-0 flex-1 rounded-full border-[2.5px] border-[#e4e0d4] bg-white px-4 py-2.5 font-body text-[16px] font-bold text-navy outline-none placeholder:font-normal placeholder:text-[#a4a2bd] focus:border-blue" id="extraCodeInput" type="text" placeholder="Code from a missing location" autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false" enterkeyhint="done" aria-label="Code from a location not on the map" />
         <button class="flex-none cursor-pointer rounded-full border-none bg-navy px-5 font-display text-sm font-bold text-white active:scale-[0.96]" id="extraCodeAdd">Add</button>
       </div>
       <div class="flex gap-2.5">
@@ -221,7 +227,7 @@
       </div>
 
       <p class="mt-[22px] mb-0.5 text-xs text-[#a09dba]" id="dataStamp"></p>
-      <p class="mt-0.5 text-xs text-[#a09dba]">Sign data from the <a class="font-bold text-peri" href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
+      <p class="mt-0.5 text-xs text-[#a09dba]">Location data from the <a class="font-bold text-peri" href="https://play.aadl.org" target="_blank" rel="noopener">AADL Summer Game</a>. Not an official AADL app.</p>
       <button class="mt-2.5 cursor-pointer border-none bg-transparent p-0 font-body text-xs font-bold text-peri underline" id="aboutBtn">How does this app work?</button>
     </div>
   </section>
@@ -230,15 +236,15 @@
   <div class="fixed inset-0 z-[68] bg-navy-deep/45" id="welcomeBackdrop" hidden></div>
   <section class="fixed top-1/2 left-1/2 z-70 max-h-[calc(100dvh-48px)] w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-[22px] bg-cream px-6 pt-6 pb-[22px] shadow-[0_12px_40px_rgba(38,40,72,0.35)]" id="welcomePanel" role="dialog" aria-modal="true" aria-label="About Sign Safari" hidden>
     <h2 class="mb-2 font-display text-[26px] leading-[1.1] font-extrabold text-navy">Welcome to Sign Safari!</h2>
-    <p class="mb-3.5 text-[14.5px] leading-[1.45] font-semibold text-ink">Plan a walking route past Summer Game lawn signs in Ann Arbor, mark the ones you find, and redeem the codes.</p>
+    <p class="mb-3.5 text-[14.5px] leading-[1.45] font-semibold text-ink">Plan a walking route past Summer Game lawn signs and business codes in Ann Arbor, or use Explore to browse the map, then save and redeem the codes you find.</p>
     <ul class="mb-3.5 list-none">
-      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-coral shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(232,112,74,0.35)]"></span><span>Pick a start, set a distance or sign-count budget, and get a street-following route that skips signs you've already seen.</span></li>
-      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-green shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(67,168,96,0.35)]"></span><span>On the walk, mark each stop seen and enter the code word from the sign.</span></li>
+      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-coral shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(232,112,74,0.35)]"></span><span>Pick a start, set a distance or stop-count budget, and get a street-following route that skips locations you've already seen.</span></li>
+      <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-green shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(67,168,96,0.35)]"></span><span>On the walk, mark each stop seen and save its code word when you have it.</span></li>
       <li class="mb-2.5 flex items-start gap-3 text-sm leading-[1.4] font-semibold"><span class="mt-1 size-[11px] flex-none rounded-full bg-gold shadow-[0_0_0_2px_#fff,0_0_0_3.5px_rgba(255,180,59,0.35)]"></span><span>Tap your progress (top right) to copy your codes and redeem at play.aadl.org.</span></li>
     </ul>
-    <h3 class="mb-1.5 font-display text-[15px] font-bold text-navy">Where the sign data comes from</h3>
+    <h3 class="mb-1.5 font-display text-[15px] font-bold text-navy">Where the location data comes from</h3>
     <p class="mb-3.5 text-[12.5px] leading-[1.45] text-[#8c88a0]">
-      Sign locations come from the same JSON feed that powers the
+      Lawn-sign and business-code locations come from the same JSON feed that powers the
       <a class="font-bold text-peri" href="https://aadl.org/summergame/map" target="_blank" rel="noopener">AADL Summer Game map</a>.
       It's not a documented public API — just the data endpoint the map loads behind the scenes.
       This app bundles a snapshot of that feed (refreshed periodically); it does not fetch live

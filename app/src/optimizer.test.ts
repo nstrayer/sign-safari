@@ -62,11 +62,11 @@ function makeNetwork(): NetworkData {
       3, 6, 10,
       2, 7, 5,
     ],
-    signs: [
-      { id: "s0", addr: "1 B St", n: 4 },
-      { id: "s1", addr: "2 C St", n: 5 },
-      { id: "s2", addr: "3 D St", n: 6 },
-      { id: "s3", addr: "4 C St", n: 7 },
+    stops: [
+      { id: "s0", addr: "1 B St", kind: "sign", n: 4 },
+      { id: "s1", addr: "2 C St", kind: "sign", n: 5 },
+      { id: "biz-2", addr: "Corner Cafe", kind: "biz", n: 6 },
+      { id: "s3", addr: "4 C St", kind: "sign", n: 7 },
     ],
   };
 }
@@ -92,7 +92,7 @@ function makeGeometryNetwork(): NetworkData {
       1000, 1000, // .004,0 -> .005,.001
       -1000, 1000, // .005,.001 -> .004,.002
     ],
-    signs: [],
+    stops: [],
   };
 }
 
@@ -106,6 +106,16 @@ function opts(over: Partial<BuildOpts> = {}): BuildOpts {
 }
 
 describe("buildGraph", () => {
+  it("keeps business-code locations as routeable stops", () => {
+    const { graph, rowFor } = setup();
+    const stops: number[] = [];
+
+    greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxCount: 4 }));
+
+    expect(graph.stops[2]).toMatchObject({ id: "biz-2", kind: "biz" });
+    expect(stops).toContain(2);
+  });
+
   it("snaps leaf signs to their street node", () => {
     const { graph } = setup();
     expect([...graph.snap]).toEqual([1, 2, 3, 2]);
@@ -263,12 +273,12 @@ describe("buildCandidates", () => {
     const o = opts({ maxMeters: 800 });
     const candidates = buildCandidates(graph, rowFor, SEED, o);
     expect(candidates.length).toBeGreaterThan(0);
-    const keys = candidates.map((c) => c.stopSigns.join(","));
+    const keys = candidates.map((c) => c.stopIndices.join(","));
     expect(new Set(keys).size).toBe(keys.length);
     for (const c of candidates) {
-      expect(new Set(c.stopSigns).size).toBe(c.stopSigns.length);
+      expect(new Set(c.stopIndices).size).toBe(c.stopIndices.length);
       expect(c.totalMeters).toBeLessThanOrEqual(o.maxMeters);
-      expect(c.totalMeters).toBe(routeTotals(graph, rowFor, SEED, c.stopSigns, false).totalMeters);
+      expect(c.totalMeters).toBe(routeTotals(graph, rowFor, SEED, c.stopIndices, false).totalMeters);
     }
   });
 
@@ -277,6 +287,18 @@ describe("buildCandidates", () => {
     const a = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
     const b = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
     expect(a).toEqual(b);
+  });
+
+  it("excludes a seen business-code location from every candidate", () => {
+    const { graph, rowFor } = setup();
+    const candidates = buildCandidates(
+      graph,
+      rowFor,
+      SEED,
+      opts({ maxMeters: 800, maxCount: 4, excluded: new Set([2]) }),
+    );
+
+    expect(candidates.flatMap((candidate) => candidate.stopIndices)).not.toContain(2);
   });
 });
 

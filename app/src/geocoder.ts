@@ -1,4 +1,4 @@
-// Shared Photon (komoot.io) geocoder used by the map tab's search and the
+// Shared Photon (komoot.io) geocoder used by Explore search and the
 // route planner's address box. Owns the endpoint, the Ann Arbor area bias,
 // the debounce/abort/stale-response discipline, and place-label assembly.
 

@@ -2,7 +2,7 @@
 // sg2026.seen  -> { "<id>": <epoch seconds marked>, ... }
 // sg2026.codes -> { "<id>": "<code word from the physical sign>", ... }
 // sg2026.mysigns -> { "<id>": [lon, lat], ... } signs the user placed themselves
-// sg2026.settings -> { hideSeen, showBiz, showBadges, distanceUnit }
+// sg2026.settings -> { showHeatmap, distanceUnit }
 // sg2026.welcomed -> "1" once the intro modal has been dismissed
 // sg2026.routeIntro -> "1" once the route planner intro has been dismissed
 // sg2026.walk -> { q: "<share params>", at: <next stop index> } while a
@@ -25,9 +25,7 @@ const WALK_KEY = "sg2026.walk";
 export type DistanceUnit = 'km' | 'mi';
 
 export interface Settings {
-  hideSeen: boolean;
-  showBiz: boolean;
-  showBadges: boolean;
+  showHeatmap: boolean;
   distanceUnit: DistanceUnit;
 }
 
@@ -81,14 +79,12 @@ export interface Store {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  hideSeen: false,
-  showBiz: true,
-  showBadges: false,
+  showHeatmap: true,
   distanceUnit: 'mi',
 };
 
 /**
- * Normalize a partial settings blob from storage, dropping unknown unit values.
+ * Normalize a partial settings blob from storage, dropping retired settings.
  *
  * @param raw - Parsed settings object (may be incomplete or stale)
  * @returns Settings with defaults filled in
@@ -96,8 +92,7 @@ const DEFAULT_SETTINGS: Settings = {
 function normalizeSettings(raw: Partial<Settings>): Settings {
   const unit = raw.distanceUnit;
   return {
-    ...DEFAULT_SETTINGS,
-    ...raw,
+    showHeatmap: typeof raw.showHeatmap === "boolean" ? raw.showHeatmap : DEFAULT_SETTINGS.showHeatmap,
     distanceUnit: unit === 'km' || unit === 'mi' ? unit : DEFAULT_SETTINGS.distanceUnit,
   };
 }
