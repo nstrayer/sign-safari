@@ -18,22 +18,15 @@ import { describe, expect, it } from "vitest";
 import {
   STUB_FREE_M,
   buildGraph,
-  buildCandidates,
   dijkstra,
   edgeCoordinates,
   edgeIndex,
-  greedyExtend,
-  legsForOrder,
   makeDijkstraCache,
-  makeRows,
   pathCoordinates,
   pathMeters,
-  routeTotals,
-  sweepOnRoute,
-  twoOptSteps,
-  wiggleExtend,
+  optimizeConstrainedRoute,
 } from "./optimizer";
-import type { BuildOpts, Graph, RowFor } from "./optimizer";
+import type { Graph, RouteAnchor } from "./optimizer";
 import type { NetworkData } from "./types";
 
 const SEED = 0; // street node A
@@ -96,24 +89,15 @@ function makeGeometryNetwork(): NetworkData {
   };
 }
 
-function setup(): { graph: Graph; rowFor: RowFor } {
-  const graph = buildGraph(makeNetwork());
-  return { graph, rowFor: makeRows(graph, makeDijkstraCache(graph)) };
-}
-
-function opts(over: Partial<BuildOpts> = {}): BuildOpts {
-  return { maxMeters: Infinity, maxCount: Infinity, excluded: new Set(), loop: false, ...over };
+function setup(): { graph: Graph } {
+  return { graph: buildGraph(makeNetwork()) };
 }
 
 describe("buildGraph", () => {
   it("keeps business-code locations as routeable stops", () => {
-    const { graph, rowFor } = setup();
-    const stops: number[] = [];
-
-    greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxCount: 4 }));
-
+    const { graph } = setup();
     expect(graph.stops[2]).toMatchObject({ id: "biz-2", kind: "biz" });
-    expect(stops).toContain(2);
+    expect(graph.snap[2]).toBe(3);
   });
 
   it("snaps leaf signs to their street node", () => {
@@ -137,24 +121,19 @@ describe("buildGraph", () => {
 
     expect([...dijkstra(shaped, SEED).dist]).toEqual([...dijkstra(plain, SEED).dist]);
 
-    const plainRows = makeRows(plain, makeDijkstraCache(plain));
-    const shapedRows = makeRows(shaped, makeDijkstraCache(shaped));
-    const stops = [0, 1, 2];
-    expect(routeTotals(shaped, shapedRows, SEED, stops, true)).toEqual(
-      routeTotals(plain, plainRows, SEED, stops, true),
-    );
-
-    const budget = opts({ maxMeters: 250 });
-    expect(buildCandidates(shaped, shapedRows, SEED, budget)).toEqual(
-      buildCandidates(plain, plainRows, SEED, budget),
-    );
-
-    const plainStops: number[] = [];
-    const shapedStops: number[] = [];
-    greedyExtend(plain, plainRows, SEED, plainStops, 0, budget);
-    greedyExtend(shaped, shapedRows, SEED, shapedStops, 0, budget);
-    expect(shapedStops).toEqual(plainStops);
-    expect(routeTotals(shaped, shapedRows, SEED, shapedStops, false).totalMeters).toBeLessThanOrEqual(budget.maxMeters);
+    expect(optimizeConstrainedRoute(shaped, {
+      start: anchor(shaped, 0, "Start"),
+      necessary: [],
+      finish: anchor(shaped, 3, "Finish"),
+      maxMeters: 300,
+      excluded: new Set(shaped.stops.map((_, index) => index)),
+    })).toEqual(optimizeConstrainedRoute(plain, {
+      start: anchor(plain, 0, "Start"),
+      necessary: [],
+      finish: anchor(plain, 3, "Finish"),
+      maxMeters: 300,
+      excluded: new Set(plain.stops.map((_, index) => index)),
+    }));
   });
 });
 
@@ -221,174 +200,184 @@ describe("dijkstra", () => {
   });
 });
 
-describe("routeTotals", () => {
-  it("sums legs at snap nodes plus stub charges", () => {
-    const { graph, rowFor } = setup();
-    // seed->B (100) + B->C (100 + 160 stub) + C->D (100)
-    const { pathMeters, totalMeters } = routeTotals(graph, rowFor, SEED, [0, 1, 2], false);
-    expect(pathMeters).toBe(460);
-    expect(totalMeters).toBe(460);
+function anchor(graph: Graph, node: number, label: string, codeStopIndex?: number): RouteAnchor {
+  return {
+    node,
+    label,
+    coords: [graph.nodes[node * 2], graph.nodes[node * 2 + 1]],
+    codeStopIndex,
+  };
+}
+
+describe("optimizeConstrainedRoute", () => {
+  it("supports the default round trip and an explicit point-to-point finish", () => {
+    const graph = buildGraph(makeNetwork());
+    const excluded = new Set(graph.stops.map((_, index) => index));
+    const roundTrip = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Home"),
+      necessary: [anchor(graph, 2, "Errand")],
+      finish: anchor(graph, 0, "Home"),
+      maxMeters: 400,
+      excluded,
+    });
+    const pointToPoint = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [],
+      finish: anchor(graph, 3, "Finish"),
+      maxMeters: 300,
+      excluded,
+    });
+
+    expect(roundTrip.status === "feasible" && roundTrip.totalMeters).toBe(400);
+    expect(pointToPoint.status === "feasible" && pointToPoint.visits.map((visit) => visit.role)).toEqual(["start", "finish"]);
+    expect(pointToPoint.status === "feasible" && pointToPoint.totalMeters).toBe(300);
   });
 
-  it("adds the leg home when looping", () => {
-    const { graph, rowFor } = setup();
-    const { pathMeters, totalMeters } = routeTotals(graph, rowFor, SEED, [0, 1, 2], true);
-    expect(pathMeters).toBe(460);
-    expect(totalMeters).toBe(760); // + 300 back from D
-  });
-});
+  it("keeps necessary stops in entered order and reports the complete mandatory distance", () => {
+    const graph = buildGraph(makeNetwork());
+    const result = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [anchor(graph, 3, "First errand"), anchor(graph, 1, "Second errand")],
+      finish: anchor(graph, 2, "Finish"),
+      maxMeters: 600,
+      excluded: new Set(graph.stops.map((_, index) => index)),
+    });
 
-describe("greedyExtend", () => {
-  it("collects nearest signs first and respects the distance budget", () => {
-    const { graph, rowFor } = setup();
-    const stops: number[] = [];
-    // sign0 (100) then sign3 (100 more); every next pick would push past 250.
-    const added = greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxMeters: 250 }));
-    expect(added).toBe(2);
-    expect(stops).toEqual([0, 3]);
-    expect(routeTotals(graph, rowFor, SEED, stops, false).totalMeters).toBeLessThanOrEqual(250);
-  });
-
-  it("budgets the return leg home when looping", () => {
-    const { graph, rowFor } = setup();
-    const stops: number[] = [];
-    // sign0: 100 out + 100 home = 200 fits; anything more would not.
-    greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxMeters: 220, loop: true }));
-    expect(stops).toEqual([0]);
-    expect(routeTotals(graph, rowFor, SEED, stops, true).totalMeters).toBeLessThanOrEqual(220);
-  });
-
-  it("respects maxCount and never repeats a stop", () => {
-    const { graph, rowFor } = setup();
-    const stops: number[] = [];
-    const added = greedyExtend(graph, rowFor, SEED, stops, 0, opts({ maxCount: 2 }));
-    expect(added).toBe(2);
-    expect(new Set(stops).size).toBe(stops.length);
-  });
-});
-
-describe("buildCandidates", () => {
-  it("returns deduped candidates that all fit the budget", () => {
-    const { graph, rowFor } = setup();
-    const o = opts({ maxMeters: 800 });
-    const candidates = buildCandidates(graph, rowFor, SEED, o);
-    expect(candidates.length).toBeGreaterThan(0);
-    const keys = candidates.map((c) => c.stopIndices.join(","));
-    expect(new Set(keys).size).toBe(keys.length);
-    for (const c of candidates) {
-      expect(new Set(c.stopIndices).size).toBe(c.stopIndices.length);
-      expect(c.totalMeters).toBeLessThanOrEqual(o.maxMeters);
-      expect(c.totalMeters).toBe(routeTotals(graph, rowFor, SEED, c.stopIndices, false).totalMeters);
-    }
-  });
-
-  it("is deterministic", () => {
-    const { graph, rowFor } = setup();
-    const a = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
-    const b = buildCandidates(graph, rowFor, SEED, opts({ maxMeters: 800 }));
-    expect(a).toEqual(b);
-  });
-
-  it("excludes a seen business-code location from every candidate", () => {
-    const { graph, rowFor } = setup();
-    const candidates = buildCandidates(
-      graph,
-      rowFor,
-      SEED,
-      opts({ maxMeters: 800, maxCount: 4, excluded: new Set([2]) }),
-    );
-
-    expect(candidates.flatMap((candidate) => candidate.stopIndices)).not.toContain(2);
-  });
-});
-
-describe("twoOptSteps", () => {
-  it("only ever shortens the route and keeps the same stops", () => {
-    const { graph, rowFor } = setup();
-    const stops = [2, 0, 1]; // deliberately tangled: out, back, out again
-    const before = [...stops];
-    let total = routeTotals(graph, rowFor, SEED, stops, false).totalMeters;
-    const start = total;
-    for (const step of twoOptSteps(graph, rowFor, SEED, stops, false)) {
-      const next = routeTotals(graph, rowFor, SEED, stops, false).totalMeters;
-      expect(next).toBeLessThan(total);
-      expect(step.saved).toBeGreaterThan(0);
-      total = next;
-    }
-    expect(total).toBeLessThan(start); // this tangle is untangleable
-    expect([...stops].sort()).toEqual([...before].sort());
-  });
-
-  it("accounts for the leg home when looping", () => {
-    const { graph, rowFor } = setup();
-    const stops = [2, 0, 3];
-    let total = routeTotals(graph, rowFor, SEED, stops, true).totalMeters;
-    for (const _ of twoOptSteps(graph, rowFor, SEED, stops, true)) {
-      const next = routeTotals(graph, rowFor, SEED, stops, true).totalMeters;
-      expect(next).toBeLessThanOrEqual(total);
-      total = next;
-    }
-  });
-});
-
-describe("legsForOrder", () => {
-  it("emits one contiguous leg per stop, chained end to start", () => {
-    const { graph } = setup();
-    const shortest = makeDijkstraCache(graph);
-    const legs = legsForOrder(graph, shortest, SEED, [0, 2], true);
-    expect(legs).toEqual([
-      [0, 1], // seed A -> sign0's snap B
-      [1, 2, 3], // B -> sign2's snap D
-      [3, 2, 1, 0], // loop home
+    expect(result.status).toBe("feasible");
+    if (result.status !== "feasible") return;
+    expect(result.visits.map((visit) => [visit.role, visit.anchor.label])).toEqual([
+      ["start", "Start"],
+      ["necessary", "First errand"],
+      ["necessary", "Second errand"],
+      ["finish", "Finish"],
     ]);
-  });
-});
-
-describe("sweepOnRoute", () => {
-  it("splices in free signs the path already passes, in walk order", () => {
-    const { graph, rowFor } = setup();
-    const shortest = makeDijkstraCache(graph);
-    const stops = [2]; // walk A -> D straight past B and C
-    const before = routeTotals(graph, rowFor, SEED, stops, false).totalMeters;
-    const swept = sweepOnRoute(graph, shortest, SEED, stops, new Set(), false);
-    // sign0 (at B) and sign3 (at C) ride along; sign1's stub charge keeps it out.
-    expect(swept).toBe(2);
-    expect(stops).toEqual([0, 3, 2]);
-    expect(new Set(stops).size).toBe(stops.length);
-    // Swept signs are free: the totals don't move.
-    expect(routeTotals(graph, rowFor, SEED, stops, false).totalMeters).toBe(before);
+    expect(result.totalMeters).toBe(600);
   });
 
-  it("skips excluded signs", () => {
-    const { graph } = setup();
-    const shortest = makeDijkstraCache(graph);
-    const stops = [2];
-    const swept = sweepOnRoute(graph, shortest, SEED, stops, new Set([0]), false);
-    expect(swept).toBe(1);
-    expect(stops).toEqual([3, 2]);
-  });
-});
-
-describe("wiggleExtend", () => {
-  it("inserts cheap detours but never runs past budget plus slack", () => {
-    const { graph, rowFor } = setup();
-    const stops = [0]; // 100 m so far
-    const o = opts({ maxMeters: 300 });
-    const added = wiggleExtend(graph, rowFor, SEED, stops, o, 50);
-    // sign3 (100 m) then sign2 (100 m more) tack onto the tail for a 300 m
-    // total; sign1's 260 m detour would blow the 350 m cap.
-    expect(added).toBe(2);
-    expect(stops).toEqual([0, 3, 2]);
-    expect(new Set(stops).size).toBe(stops.length);
-    const { totalMeters } = routeTotals(graph, rowFor, SEED, stops, false);
-    expect(totalMeters).toBeLessThanOrEqual(o.maxMeters + 50);
+  it("returns the minimum required distance when the itinerary exceeds the cap", () => {
+    const graph = buildGraph(makeNetwork());
+    expect(optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [],
+      finish: anchor(graph, 3, "Finish"),
+      maxMeters: 299,
+      excluded: new Set(),
+    })).toEqual({ status: "infeasible", minimumMeters: 300 });
   });
 
-  it("adds nothing when even the slack cannot cover a detour", () => {
-    const { graph, rowFor } = setup();
-    const stops = [0];
-    const added = wiggleExtend(graph, rowFor, SEED, stops, opts({ maxMeters: 120 }), 10);
-    expect(added).toBe(0);
-    expect(stops).toEqual([0]);
+  it("returns Infinity when a required anchor is disconnected", () => {
+    const raw = makeNetwork();
+    raw.nodes.push(0.01, 0.01);
+    const graph = buildGraph(raw);
+    expect(optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [],
+      finish: anchor(graph, graph.nodeCount - 1, "Nowhere"),
+      maxMeters: 10_000,
+      excluded: new Set(),
+    })).toEqual({ status: "infeasible", minimumMeters: Infinity });
+  });
+
+  it("inserts eligible code locations without crossing anchors or exceeding the global cap", () => {
+    const graph = buildGraph(makeNetwork());
+    const result = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [anchor(graph, 2, "Errand")],
+      finish: anchor(graph, 0, "Start"),
+      maxMeters: 400,
+      excluded: new Set([1]),
+    });
+
+    expect(result.status).toBe("feasible");
+    if (result.status !== "feasible") return;
+    const necessaryAt = result.visits.findIndex((visit) => visit.role === "necessary");
+    expect(result.visits.slice(1, necessaryAt).every((visit) => visit.role === "optional")).toBe(true);
+    expect(result.visits.slice(necessaryAt + 1, -1).every((visit) => visit.role === "optional")).toBe(true);
+    expect(result.visits.filter((visit) => visit.role === "optional").map((visit) => visit.codeStopIndex)).not.toContain(1);
+    expect(result.totalMeters).toBeLessThanOrEqual(400);
+  });
+
+  it("applies Skip seen only to optional candidates and breaks ties deterministically", () => {
+    const graph = buildGraph(makeNetwork());
+    const requiredSeenCode = anchor(graph, graph.snap[0], "Required seen code", 0);
+    const request = {
+      start: anchor(graph, 0, "Start"),
+      necessary: [requiredSeenCode],
+      finish: anchor(graph, 0, "Start"),
+      maxMeters: 800,
+      excluded: new Set([0, 2]),
+    };
+
+    const first = optimizeConstrainedRoute(graph, request);
+    const second = optimizeConstrainedRoute(graph, request);
+    expect(first).toEqual(second);
+    expect(first.status).toBe("feasible");
+    if (first.status !== "feasible") return;
+    expect(first.visits.find((visit) => visit.role === "necessary")?.codeStopIndex).toBe(0);
+    expect(first.visits.filter((visit) => visit.role === "optional").map((visit) => visit.codeStopIndex)).not.toContain(2);
+    expect(first.totalMeters).toBeLessThanOrEqual(request.maxMeters);
+  });
+
+  it("represents a necessary code location once and keeps it trackable", () => {
+    const graph = buildGraph(makeNetwork());
+    const requiredCode = anchor(graph, graph.snap[0], "1 B St", 0);
+    const result = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [requiredCode],
+      finish: anchor(graph, 0, "Start"),
+      maxMeters: 200,
+      excluded: new Set([1, 2, 3]),
+    });
+
+    expect(result.status).toBe("feasible");
+    if (result.status !== "feasible") return;
+    expect(result.visits.filter((visit) => visit.codeStopIndex === 0)).toHaveLength(1);
+    expect(result.visits.find((visit) => visit.codeStopIndex === 0)?.role).toBe("necessary");
+    expect(result.codeLocationCount).toBe(1);
+  });
+
+  it("includes a necessary code location's long access path in the hard minimum", () => {
+    const graph = buildGraph(makeNetwork());
+    const requiredCode = anchor(graph, graph.snap[1], "Long-access code", 1);
+
+    expect(optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [requiredCode],
+      finish: anchor(graph, 0, "Start"),
+      maxMeters: 559,
+      excluded: new Set(),
+    })).toEqual({ status: "infeasible", minimumMeters: 560 });
+  });
+
+  it("does not count the Start anchor as a code location to visit", () => {
+    const graph = buildGraph(makeNetwork());
+    const result = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, graph.snap[0], "Start at a code", 0),
+      necessary: [],
+      finish: anchor(graph, 0, "Finish"),
+      maxMeters: 100,
+      excluded: new Set([1, 2, 3]),
+    });
+
+    expect(result.status).toBe("feasible");
+    if (result.status !== "feasible") return;
+    expect(result.codeLocationCount).toBe(0);
+  });
+
+  it("returns a valid required-only route when no optional code location fits", () => {
+    const graph = buildGraph(makeNetwork());
+    const result = optimizeConstrainedRoute(graph, {
+      start: anchor(graph, 0, "Start"),
+      necessary: [anchor(graph, 1, "Errand")],
+      finish: anchor(graph, 0, "Start"),
+      maxMeters: 200,
+      excluded: new Set(graph.stops.map((_, index) => index)),
+    });
+
+    expect(result.status).toBe("feasible");
+    if (result.status !== "feasible") return;
+    expect(result.visits.map((visit) => visit.role)).toEqual(["start", "necessary", "finish"]);
+    expect(result.optionalByGap).toEqual([[], []]);
+    expect(result.totalMeters).toBe(200);
   });
 });

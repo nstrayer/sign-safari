@@ -103,7 +103,25 @@
   color: var(--color-navy);
 }
 
-.route-stops li.stop-start:last-child::before { content: "F"; }
+.route-stops li.stop-finish {
+  counter-increment: none;
+  font-weight: 700;
+  color: var(--color-navy);
+}
+
+.route-stops li.stop-finish::before {
+  content: "F";
+  background: var(--color-gold);
+  color: var(--color-navy);
+}
+
+.route-stops li.stop-necessary::before {
+  content: "N";
+  background: var(--color-peri);
+  box-shadow: 0 0 0 2px var(--color-gold);
+}
+
+.route-stops li.stop-necessary { counter-increment: none; }
 
 body.route-mode #searchWrap { display: none; }
 

@@ -9,15 +9,15 @@ in localStorage. Each location's card also takes its code word; the
 progress panel's "Copy code list" button exports all collected codes for
 redeeming at play.aadl.org. No backend server.
 
-Route plans walking routes along real streets: start from your location, a
-searched address, or any tapped route stop, pick a distance or stop-count
-budget, and it greedily collects nearby lawn signs and business-code
-locations, then 2-opts the visiting order (`app/src/route.ts`, all
-client-side over the prebuilt street network in
-`app/public/data/network.json`). Explore is the free-form map for browsing,
-searching, tracking, and finding density with its optional heatmap. Routes
-export as GPX (waypoints per stop + the full track) for Garmin/Apple
-Watch/Strava.
+Route plans walking itineraries along real streets: start from your location,
+a searched address, or any tapped route stop; add ordered necessary stops;
+choose a finish (the start by default); and set a hard maximum walking
+distance. The client-side constrained optimizer preserves that itinerary and
+uses the remaining distance for lawn signs and business-code locations over
+the prebuilt street network in `app/public/data/network.json`. Explore is the
+free-form map for browsing, searching, tracking, and finding density with its
+optional heatmap. Routes export as GPX (ordered waypoints + the full track)
+for Garmin/Apple Watch/Strava.
 
 ## Layout
 

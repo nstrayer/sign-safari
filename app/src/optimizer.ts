@@ -1,5 +1,5 @@
-// Pure route-optimization core: street-graph construction plus the routing
-// passes, with no DOM or browser dependencies.
+// Pure route-optimization core: street-graph construction plus constrained
+// itinerary planning, with no DOM or browser dependencies.
 //
 // Data comes from data/network.json (built by scripts/build_network.py):
 //   nodes: [lon0, lat0, lon1, lat1, ...]
@@ -7,11 +7,10 @@
 //   edgeGeometryOffsets / edgeGeometryDeltas: optional compact road shapes
 //   stops: [{ id, addr, kind, n }] where n indexes nodes
 //
-// All routing runs client-side: Dijkstra over a CSR adjacency, a greedy
-// nearest-unvisited walk from the seed until the budget runs out, then
-// 2-opt to untangle the visiting order, a sweep that pulls in stops the
-// path already walks past, and a stretch pass that runs slightly over
-// budget when a short detour buys more stops.
+// All routing runs client-side. Dijkstra supplies shortest paths between the
+// immutable Start -> Necessary stops -> Finish anchors. Optional code
+// locations are then inserted into individual anchor gaps while the complete
+// itinerary remains within its hard distance cap.
 //
 // Stops are measured at their street snap node: a location is seen from
 // the road, so the access stub isn't real walking (unless it's long -
@@ -302,243 +301,292 @@ export function makeDijkstraCache(graph: Graph, cap = 128): Shortest {
   };
 }
 
-// ---------- Routing ----------
+// ---------- Constrained itinerary routing ----------
 
-// The seed is any node on the network (a stop's node, or the node nearest a
-// geolocation/address). A location sitting exactly at the seed is simply the
-// first greedy pick at 0 m. With `loop`, the route returns to the seed and
-// the budget covers the leg home.
-//
-// The build is split into pieces so the UI can narrate and animate it:
-// greedy draft first, then a 2-opt generator that yields after every
-// accepted improvement.
+/** A required place attached to one node in the walking graph. */
+export interface RouteAnchor {
+  node: number;
+  label: string;
+  coords: LonLat;
+  /** Present when the place is also one of graph.stops. */
+  codeStopIndex?: number;
+}
 
-export type RowFor = (node: number) => Float32Array;
+export interface ConstrainedRouteRequest {
+  start: RouteAnchor;
+  necessary: RouteAnchor[];
+  finish: RouteAnchor;
+  maxMeters: number;
+  /** Optional code locations that may not be added (normally already seen). */
+  excluded: ReadonlySet<number>;
+}
 
-// Per-build cache of "distance from node X to every stop's snap node" rows.
-// Pure road distance: any stub charge rides in graph.stubExtra instead.
-export function makeRows(graph: Graph, shortest: Shortest): RowFor {
-  const rows = new Map<number, Float32Array>();
-  return (node) => {
-    if (!rows.has(node)) {
-      const { dist } = shortest(node);
-      const row = new Float32Array(graph.stops.length);
-      for (let j = 0; j < graph.stops.length; j++) row[j] = dist[graph.snap[j]];
-      rows.set(node, row);
+export type RouteVisitRole = "start" | "necessary" | "optional" | "finish";
+
+export interface RouteVisit {
+  role: RouteVisitRole;
+  anchor: RouteAnchor;
+  codeStopIndex?: number;
+  necessaryIndex?: number;
+  gapIndex?: number;
+}
+
+export interface FeasibleConstrainedRoute {
+  status: "feasible";
+  visits: RouteVisit[];
+  /** One street-node path for every visit after Start. */
+  legs: number[][];
+  pathNodes: number[];
+  totalMeters: number;
+  minimumMeters: number;
+  /** Optional graph.stop indices in each hard-anchor gap. */
+  optionalByGap: number[][];
+  codeLocationCount: number;
+}
+
+export interface InfeasibleConstrainedRoute {
+  status: "infeasible";
+  /** Infinity means at least one pair of required anchors is disconnected. */
+  minimumMeters: number;
+}
+
+export type ConstrainedRouteResult = FeasibleConstrainedRoute | InfeasibleConstrainedRoute;
+export type ConstrainedRouteAnchors = Pick<ConstrainedRouteRequest, "start" | "necessary" | "finish">;
+
+function shortestPath(shortest: Shortest, from: number, to: number): number[] {
+  if (from === to) return [from];
+  const { dist, prev } = shortest(from);
+  if (!isFinite(dist[to])) return [];
+  const path: number[] = [];
+  for (let node = to; node !== -1; node = prev[node]) path.push(node);
+  path.reverse();
+  return path[0] === from ? path : [];
+}
+
+function materializeWithShortest(
+  graph: Graph,
+  anchors: ConstrainedRouteAnchors,
+  optionalByGap: readonly (readonly number[])[],
+  shortest: Shortest,
+): FeasibleConstrainedRoute | null {
+  if (optionalByGap.length !== anchors.necessary.length + 1) return null;
+  const hard = [anchors.start, ...anchors.necessary, anchors.finish];
+  const usedCodes = new Set(hard.flatMap((anchor) => anchor.codeStopIndex === undefined ? [] : [anchor.codeStopIndex]));
+  const normalizedGaps = optionalByGap.map((gap) => gap.filter((stopIndex) => {
+    if (stopIndex < 0 || stopIndex >= graph.stops.length || usedCodes.has(stopIndex)) return false;
+    usedCodes.add(stopIndex);
+    return true;
+  }));
+
+  const visits: RouteVisit[] = [{ role: "start", anchor: anchors.start, codeStopIndex: anchors.start.codeStopIndex }];
+  for (let gap = 0; gap < normalizedGaps.length; gap++) {
+    for (const stopIndex of normalizedGaps[gap]) {
+      const stop = graph.stops[stopIndex];
+      visits.push({
+        role: "optional",
+        gapIndex: gap,
+        codeStopIndex: stopIndex,
+        anchor: {
+          node: graph.snap[stopIndex],
+          label: stop.addr,
+          coords: [graph.nodes[stop.n * 2], graph.nodes[stop.n * 2 + 1]],
+          codeStopIndex: stopIndex,
+        },
+      });
     }
-    return rows.get(node)!; // set just above when missing
+    if (gap < anchors.necessary.length) {
+      const anchor = anchors.necessary[gap];
+      visits.push({ role: "necessary", necessaryIndex: gap, anchor, codeStopIndex: anchor.codeStopIndex });
+    } else {
+      visits.push({ role: "finish", anchor: anchors.finish, codeStopIndex: anchors.finish.codeStopIndex });
+    }
+  }
+
+  let minimumMeters = 0;
+  for (let index = 1; index < hard.length; index++) {
+    const meters = shortest(hard[index - 1].node).dist[hard[index].node];
+    if (!isFinite(meters)) return null;
+    const codeStopIndex = hard[index].codeStopIndex;
+    minimumMeters += meters + (codeStopIndex === undefined ? 0 : graph.stubExtra[codeStopIndex]);
+  }
+  const legs: number[][] = [];
+  let totalMeters = 0;
+  for (let index = 1; index < visits.length; index++) {
+    const visit = visits[index];
+    const leg = shortestPath(shortest, visits[index - 1].anchor.node, visit.anchor.node);
+    if (!leg.length) return null;
+    legs.push(leg);
+    totalMeters += shortest(visits[index - 1].anchor.node).dist[visit.anchor.node];
+    if (visit.codeStopIndex !== undefined) totalMeters += graph.stubExtra[visit.codeStopIndex];
+  }
+  const codeLocationCount = new Set(
+    visits.slice(1).flatMap((visit) => visit.codeStopIndex === undefined ? [] : [visit.codeStopIndex]),
+  ).size;
+  return {
+    status: "feasible",
+    visits,
+    legs,
+    pathNodes: legs.flat(),
+    totalMeters,
+    minimumMeters,
+    optionalByGap: normalizedGaps,
+    codeLocationCount,
   };
 }
 
-export interface BuildOpts {
-  maxMeters: number;
-  maxCount: number;
-  excluded: Set<number>;
-  loop: boolean;
+/** Rebuild a saved itinerary from its stable optional-stop gap groups. */
+export function materializeConstrainedRoute(
+  graph: Graph,
+  anchors: ConstrainedRouteAnchors,
+  optionalByGap: readonly (readonly number[])[],
+): FeasibleConstrainedRoute | null {
+  return materializeWithShortest(graph, anchors, optionalByGap, makeDijkstraCache(graph));
 }
 
-// Greedy: extend an existing stop order (possibly empty) by repeatedly
-// walking to the nearest stop that still fits the budget (including, for
-// loops, the return leg home; the undirected graph makes the seed's own
-// row double as "distance home"). Mutates stopIndices; also used to refill
-// budget freed up by 2-opt.
-export function greedyExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], spentMeters: number, { maxMeters, maxCount, excluded, loop }: BuildOpts): number {
-  const { stops, snap, stubExtra } = graph;
-  const homeRow = rowFor(seedNode);
-  const used = new Set(stopIndices);
-  const todo = new Set<number>();
-  for (let i = 0; i < stops.length; i++) {
-    if (!excluded.has(i) && !used.has(i)) todo.add(i);
+/**
+ * Plan one route through immutable ordered anchors, spending only the
+ * remaining global distance budget on code locations. The heuristic always
+ * inserts the cheapest currently available detour; ties retain graph.stop
+ * order so identical requests are deterministic.
+ */
+export function optimizeConstrainedRoute(graph: Graph, request: ConstrainedRouteRequest): ConstrainedRouteResult {
+  const shortest = makeDijkstraCache(graph);
+  const hard = [request.start, ...request.necessary, request.finish];
+  let mandatoryExtras = 0;
+  let minimumMeters = 0;
+  for (let gap = 0; gap < hard.length - 1; gap++) {
+    const meters = shortest(hard[gap].node).dist[hard[gap + 1].node];
+    if (!isFinite(meters)) return { status: "infeasible", minimumMeters: Infinity };
+    minimumMeters += meters;
+    const codeStopIndex = hard[gap + 1].codeStopIndex;
+    if (codeStopIndex !== undefined) mandatoryExtras += graph.stubExtra[codeStopIndex];
   }
+  minimumMeters += mandatoryExtras;
+  if (minimumMeters > request.maxMeters) return { status: "infeasible", minimumMeters };
 
-  let total = spentMeters;
-  let cursor = stopIndices.length ? snap[stopIndices[stopIndices.length - 1]] : seedNode;
-  let added = 0;
-  while (todo.size && stopIndices.length < maxCount) {
-    const row = rowFor(cursor);
-    let best = -1, bestD = Infinity;
-    for (const c of todo) {
-      const cost = row[c] + stubExtra[c];
-      if (cost >= bestD) continue;
-      if (total + cost + (loop ? homeRow[c] : 0) > maxMeters) continue;
-      bestD = cost;
-      best = c;
+  const optionalByGap = Array.from({ length: hard.length - 1 }, () => [] as number[]);
+  const requiredCodes = new Set<number>();
+  for (const anchor of hard) {
+    if (anchor.codeStopIndex !== undefined) requiredCodes.add(anchor.codeStopIndex);
+  }
+  const used = new Set(requiredCodes);
+
+  const routeNodeForStop = (stopIndex: number) => graph.snap[stopIndex];
+  const gapNodes = (gap: number): number[] => [
+    hard[gap].node,
+    ...optionalByGap[gap].map(routeNodeForStop),
+    hard[gap + 1].node,
+  ];
+  const gapMeters = (gap: number): number => {
+    const nodes = gapNodes(gap);
+    let total = 0;
+    for (let i = 1; i < nodes.length; i++) total += shortest(nodes[i - 1]).dist[nodes[i]];
+    for (const stopIndex of optionalByGap[gap]) total += graph.stubExtra[stopIndex];
+    return total;
+  };
+  const totalMeters = () => optionalByGap.reduce((total, _, gap) => total + gapMeters(gap), mandatoryExtras);
+
+  // Keep the endpoints of a gap fixed while reversing optional subsequences.
+  function optimizeGap(gap: number): void {
+    const order = optionalByGap[gap];
+    for (let pass = 0; pass < 10; pass++) {
+      let improved = false;
+      for (let i = 0; i < order.length - 1; i++) {
+        for (let j = i + 1; j < order.length; j++) {
+          const before = i === 0 ? hard[gap].node : routeNodeForStop(order[i - 1]);
+          const first = routeNodeForStop(order[i]);
+          const last = routeNodeForStop(order[j]);
+          const after = j === order.length - 1 ? hard[gap + 1].node : routeNodeForStop(order[j + 1]);
+          const oldMeters = shortest(before).dist[first] + shortest(last).dist[after];
+          const newMeters = shortest(before).dist[last] + shortest(first).dist[after];
+          if (newMeters < oldMeters - 0.01) {
+            const reversed = order.slice(i, j + 1).reverse();
+            order.splice(i, reversed.length, ...reversed);
+            improved = true;
+          }
+        }
+      }
+      if (!improved) break;
     }
-    if (best < 0 || !isFinite(bestD)) break;
-    stopIndices.push(best);
-    todo.delete(best);
-    total += bestD;
-    added++;
-    cursor = snap[best];
   }
-  return added;
-}
 
-// Path length of a stop order, with and without the loop leg home.
-export function routeTotals(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], loop: boolean): { pathMeters: number; totalMeters: number } {
-  const homeRow = rowFor(seedNode);
-  let pathMeters = 0;
-  let prevNode = seedNode;
-  for (const si of stopIndices) {
-    pathMeters += rowFor(prevNode)[si] + graph.stubExtra[si];
-    prevNode = graph.snap[si];
+  // Pull every eligible zero-detour stop already traversed by a gap into the
+  // route in one pass. Besides matching the itinerary semantics, batching the
+  // sweep avoids rescanning the full stop set once per free location.
+  function sweepGap(gap: number): number {
+    const existing = [...optionalByGap[gap]];
+    const anchors = [hard[gap].node, ...existing.map(routeNodeForStop), hard[gap + 1].node];
+    const byNode = new Map<number, number[]>();
+    for (let stopIndex = 0; stopIndex < graph.stops.length; stopIndex++) {
+      if (used.has(stopIndex) || request.excluded.has(stopIndex) || graph.stubExtra[stopIndex] > 0) continue;
+      const node = routeNodeForStop(stopIndex);
+      const atNode = byNode.get(node);
+      if (atNode) atNode.push(stopIndex);
+      else byNode.set(node, [stopIndex]);
+    }
+
+    const swept: number[] = [];
+    let added = 0;
+    for (let segment = 0; segment < anchors.length - 1; segment++) {
+      for (const node of shortestPath(shortest, anchors[segment], anchors[segment + 1])) {
+        for (const stopIndex of byNode.get(node) ?? []) {
+          if (used.has(stopIndex)) continue;
+          swept.push(stopIndex);
+          used.add(stopIndex);
+          added++;
+        }
+      }
+      if (segment < existing.length) swept.push(existing[segment]);
+    }
+    optionalByGap[gap] = swept;
+    return added;
   }
-  const home = loop && stopIndices.length ? homeRow[stopIndices[stopIndices.length - 1]] : 0;
-  return { pathMeters, totalMeters: pathMeters + home };
-}
 
-export interface Candidate {
-  stopIndices: number[];
-  pathMeters: number;
-  totalMeters: number;
-}
+  let total = minimumMeters;
+  for (let gap = 0; gap < optionalByGap.length; gap++) sweepGap(gap);
+  for (;;) {
+    let bestStop = -1;
+    let bestGap = -1;
+    let bestPosition = -1;
+    let bestDelta = Infinity;
 
-// Multi-start: greedy is myopic about its opening move, so run it once for
-// each of the k nearest viable first stops and let the results race.
-// Duplicates (openers that converge to the same route) are dropped.
-export function buildCandidates(graph: Graph, rowFor: RowFor, seedNode: number, opts: BuildOpts, k = 4): Candidate[] {
-  const homeRow = rowFor(seedNode);
-  const openers: [number, number][] = [];
-  for (let i = 0; i < graph.stops.length; i++) {
-    if (opts.excluded.has(i)) continue;
-    const d = homeRow[i] + graph.stubExtra[i];
-    if (!isFinite(d) || d + (opts.loop ? homeRow[i] : 0) > opts.maxMeters) continue;
-    openers.push([d, i]);
-  }
-  openers.sort((a, b) => a[0] - b[0]);
-
-  const dedupe = new Set<string>();
-  const candidates: Candidate[] = [];
-  for (const [d, first] of openers.slice(0, k)) {
-    const stopIndices = [first];
-    greedyExtend(graph, rowFor, seedNode, stopIndices, d, opts);
-    const key = stopIndices.join(",");
-    if (dedupe.has(key)) continue;
-    dedupe.add(key);
-    candidates.push({ stopIndices, ...routeTotals(graph, rowFor, seedNode, stopIndices, opts.loop) });
-  }
-  return candidates;
-}
-
-// 2-opt with the seed as a fixed anchor: reverse segments while the path
-// (plus the leg home, when looping) gets shorter. Mutates stopIndices and
-// yields after each accepted reversal so the caller can animate it.
-// Stub charges don't move under reversal, so pure road rows suffice.
-export function* twoOptSteps(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], loop: boolean): Generator<{ pass: number; saved: number }> {
-  const { snap } = graph;
-  const homeRow = rowFor(seedNode);
-  const nodeOf = (p: number) => (p < 0 ? seedNode : snap[stopIndices[p]]);
-  const D = (p: number, signPos: number) => rowFor(nodeOf(p))[stopIndices[signPos]];
-  let saved = 0;
-  for (let pass = 1; pass <= 10; pass++) {
-    let improved = false;
-    for (let i = 0; i < stopIndices.length - 1; i++) {
-      for (let j = i + 1; j < stopIndices.length; j++) {
-        let delta = D(i - 1, j) - D(i - 1, i);
-        if (j + 1 < stopIndices.length) delta += D(i, j + 1) - D(j, j + 1);
-        else if (loop) delta += homeRow[stopIndices[i]] - homeRow[stopIndices[j]];
-        if (delta < -0.01) {
-          let lo = i, hi = j;
-          while (lo < hi) { const t = stopIndices[lo]; stopIndices[lo++] = stopIndices[hi]; stopIndices[hi--] = t; }
-          saved -= delta;
-          improved = true;
-          yield { pass, saved };
+    // Stop index is the outer loop so equal-cost choices are stable.
+    for (let stopIndex = 0; stopIndex < graph.stops.length; stopIndex++) {
+      if (used.has(stopIndex) || request.excluded.has(stopIndex)) continue;
+      const stopNode = routeNodeForStop(stopIndex);
+      for (let gap = 0; gap < optionalByGap.length; gap++) {
+        const nodes = gapNodes(gap);
+        for (let position = 0; position < nodes.length - 1; position++) {
+          const left = nodes[position], right = nodes[position + 1];
+          const toStop = shortest(left).dist[stopNode];
+          // The walking graph is undirected, so source the second distance at
+          // the route anchor too. This keeps the Dijkstra cache proportional
+          // to route visits rather than to every candidate code location.
+          const fromStop = shortest(right).dist[stopNode];
+          const direct = shortest(left).dist[right];
+          if (!isFinite(toStop) || !isFinite(fromStop) || !isFinite(direct)) continue;
+          const delta = Math.max(0, toStop + fromStop - direct + graph.stubExtra[stopIndex]);
+          if (total + delta > request.maxMeters) continue;
+          if (delta < bestDelta - 0.01) {
+            bestStop = stopIndex;
+            bestGap = gap;
+            bestPosition = position;
+            bestDelta = delta;
+          }
         }
       }
     }
-    if (!improved) break;
-  }
-}
 
-// Street-node path for the current stop order: one leg per stop, walking
-// prev[] back from each leg's end, plus the leg home when looping.
-export function legsForOrder(graph: Graph, shortest: Shortest, seedNode: number, stopIndices: number[], loop: boolean): number[][] {
-  const targets = stopIndices.map((si) => graph.snap[si]);
-  if (loop && stopIndices.length) targets.push(seedNode);
-  const legs: number[][] = [];
-  let from = seedNode;
-  for (const to of targets) {
-    const { prev } = shortest(from);
-    const leg: number[] = [];
-    for (let v = to; v !== -1; v = prev[v]) leg.push(v);
-    leg.reverse();
-    legs.push(leg);
-    from = to;
+    if (bestStop < 0) break;
+    optionalByGap[bestGap].splice(bestPosition, 0, bestStop);
+    used.add(bestStop);
+    optimizeGap(bestGap);
+    sweepGap(bestGap);
+    total = totalMeters();
   }
-  return legs;
-}
 
-// Stops whose snap node already lies on the walked path ride along free:
-// splice each into the stop order at the point the route passes it.
-// Mutates stopIndices; returns how many came aboard.
-export function sweepOnRoute(graph: Graph, shortest: Shortest, seedNode: number, stopIndices: number[], excluded: Set<number>, loop: boolean): number {
-  const legs = legsForOrder(graph, shortest, seedNode, stopIndices, loop);
-  // First place each path node appears, keyed as leg * 1e6 + position.
-  const firstAt = new Map<number, number>();
-  legs.forEach((leg, li) => leg.forEach((n, p) => {
-    if (!firstAt.has(n)) firstAt.set(n, li * 1e6 + p);
-  }));
-  const used = new Set(stopIndices);
-  const picks: [number, number][] = []; // [orderKey, stop]
-  for (let c = 0; c < graph.stops.length; c++) {
-    if (used.has(c) || excluded.has(c) || graph.stubExtra[c] > 0) continue;
-    const key = firstAt.get(graph.snap[c]);
-    if (key !== undefined) picks.push([key, c]);
-  }
-  if (!picks.length) return 0;
-  picks.sort((a, b) => a[0] - b[0]);
-  // Rebuild the order leg by leg; leg li ends at stop li, so its swept
-  // stops slot in just before it (home-leg stops land after the last stop).
-  const out: number[] = [];
-  let pi = 0;
-  for (let li = 0; li < legs.length; li++) {
-    while (pi < picks.length && Math.floor(picks[pi][0] / 1e6) === li) out.push(picks[pi++][1]);
-    if (li < stopIndices.length) out.push(stopIndices[li]);
-  }
-  stopIndices.length = 0;
-  stopIndices.push(...out);
-  return picks.length;
-}
-
-// Stretch pass: once the route has settled, keep inserting the leftover
-// stop with the cheapest best-position detour, letting the total run up to
-// slackMeters past the budget - a slightly longer walk that bags more
-// stops. Mutates stopIndices; returns how many were added.
-export function wiggleExtend(graph: Graph, rowFor: RowFor, seedNode: number, stopIndices: number[], { maxMeters, maxCount, excluded, loop }: BuildOpts, slackMeters: number): number {
-  const { stops, snap, stubExtra } = graph;
-  const cap = maxMeters + slackMeters;
-  let total = routeTotals(graph, rowFor, seedNode, stopIndices, loop).totalMeters;
-  const used = new Set(stopIndices);
-  let added = 0;
-  while (stopIndices.length < maxCount) {
-    // Route anchors in walk order: seed, each stop's snap node, and the
-    // seed again when looping. Gap g sits between anchors g and g+1;
-    // dist(anchor, stop k) is just that anchor's row at k.
-    const anchors = [seedNode];
-    for (const si of stopIndices) anchors.push(snap[si]);
-    if (loop) anchors.push(seedNode);
-    const rows = anchors.map((n) => rowFor(n));
-    const gapLen = (g: number) =>
-      g < stopIndices.length ? rows[g][stopIndices[g]] : rows[g + 1][stopIndices[g - 1]];
-
-    let best = -1, bestGap = -1, bestDelta = Infinity;
-    for (let c = 0; c < stops.length; c++) {
-      if (used.has(c) || excluded.has(c)) continue;
-      for (let g = 0; g < anchors.length - 1; g++) {
-        const delta = rows[g][c] + rows[g + 1][c] - gapLen(g) + stubExtra[c];
-        if (delta < bestDelta) { bestDelta = delta; bestGap = g; best = c; }
-      }
-      if (!loop) {
-        // Open-ended route: tacking c onto the tail is also fair game.
-        const delta = rows[rows.length - 1][c] + stubExtra[c];
-        if (delta < bestDelta) { bestDelta = delta; bestGap = stopIndices.length; best = c; }
-      }
-    }
-    if (best < 0 || !isFinite(bestDelta) || total + bestDelta > cap) break;
-    stopIndices.splice(bestGap, 0, best);
-    used.add(best);
-    total += bestDelta;
-    added++;
-  }
-  return added;
+  return materializeWithShortest(graph, request, optionalByGap, shortest) ?? {
+    status: "infeasible",
+    minimumMeters: Infinity,
+  };
 }
